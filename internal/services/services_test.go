@@ -39,7 +39,7 @@ func TestGameServices(t *testing.T) {
 	}
 	t.Logf("Mods stats: %d enabled, %d with thumbnails extracted", enabledCount, hasThumbCount)
 
-	mapSvc := NewMapService()
+	mapSvc := NewMapService(prefSvc)
 	maps, err := mapSvc.ScanMaps(gameDir)
 	if err != nil {
 		t.Fatalf("ScanMaps error: %v", err)

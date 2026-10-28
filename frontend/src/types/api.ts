@@ -23,6 +23,9 @@ export interface MapItem {
   filePath: string
   isPack: boolean
   packName: string
+  parentModFile: string
+  locationType: 'standalone' | 'map_pack' | 'unit_mod'
+  active: boolean
   title: string
   width: number
   height: number
@@ -40,6 +43,7 @@ export interface GameStatus {
   enabledMods: number
   disabledMods: number
   totalMaps: number
+  activeMaps: number
 }
 
 export interface LaunchConfig {
@@ -51,7 +55,24 @@ export interface LaunchConfig {
   extraArgs: string
 }
 
+export interface GamePreferences {
+  highRefreshRate: boolean
+  renderVsync: boolean
+  showFps: boolean
+  renderSmoothDelta: boolean
+  renderAntiAlias: boolean
+  renderFancyWater: boolean
+  renderClouds: boolean
+  renderExtraShadows: boolean
+  teamShaders: boolean
+  newRender: boolean
+  teamUnitCapSinglePlayer: number
+  teamUnitCapHostedGame: number
+  uiRenderScale: number
+}
+
 export interface AppConfig {
   gameDir: string
   launchConfig: LaunchConfig
+  gamePreferences: GamePreferences
 }

@@ -1,5 +1,41 @@
 export namespace models {
 	
+	export class GamePreferences {
+	    highRefreshRate: boolean;
+	    renderVsync: boolean;
+	    showFps: boolean;
+	    renderSmoothDelta: boolean;
+	    renderAntiAlias: boolean;
+	    renderFancyWater: boolean;
+	    renderClouds: boolean;
+	    renderExtraShadows: boolean;
+	    teamShaders: boolean;
+	    newRender: boolean;
+	    teamUnitCapSinglePlayer: number;
+	    teamUnitCapHostedGame: number;
+	    uiRenderScale: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new GamePreferences(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.highRefreshRate = source["highRefreshRate"];
+	        this.renderVsync = source["renderVsync"];
+	        this.showFps = source["showFps"];
+	        this.renderSmoothDelta = source["renderSmoothDelta"];
+	        this.renderAntiAlias = source["renderAntiAlias"];
+	        this.renderFancyWater = source["renderFancyWater"];
+	        this.renderClouds = source["renderClouds"];
+	        this.renderExtraShadows = source["renderExtraShadows"];
+	        this.teamShaders = source["teamShaders"];
+	        this.newRender = source["newRender"];
+	        this.teamUnitCapSinglePlayer = source["teamUnitCapSinglePlayer"];
+	        this.teamUnitCapHostedGame = source["teamUnitCapHostedGame"];
+	        this.uiRenderScale = source["uiRenderScale"];
+	    }
+	}
 	export class LaunchConfig {
 	    executableType: string;
 	    maxMemoryMb: number;
@@ -25,6 +61,7 @@ export namespace models {
 	export class AppConfig {
 	    gameDir: string;
 	    launchConfig: LaunchConfig;
+	    gamePreferences: GamePreferences;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -34,6 +71,7 @@ export namespace models {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.gameDir = source["gameDir"];
 	        this.launchConfig = this.convertValues(source["launchConfig"], LaunchConfig);
+	        this.gamePreferences = this.convertValues(source["gamePreferences"], GamePreferences);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -54,6 +92,7 @@ export namespace models {
 		    return a;
 		}
 	}
+	
 	export class GameStatus {
 	    gameDir: string;
 	    isValid: boolean;
@@ -62,6 +101,7 @@ export namespace models {
 	    enabledMods: number;
 	    disabledMods: number;
 	    totalMaps: number;
+	    activeMaps: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new GameStatus(source);
@@ -76,6 +116,7 @@ export namespace models {
 	        this.enabledMods = source["enabledMods"];
 	        this.disabledMods = source["disabledMods"];
 	        this.totalMaps = source["totalMaps"];
+	        this.activeMaps = source["activeMaps"];
 	    }
 	}
 	
@@ -85,6 +126,9 @@ export namespace models {
 	    filePath: string;
 	    isPack: boolean;
 	    packName: string;
+	    parentModFile: string;
+	    locationType: string;
+	    active: boolean;
 	    title: string;
 	    width: number;
 	    height: number;
@@ -104,6 +148,9 @@ export namespace models {
 	        this.filePath = source["filePath"];
 	        this.isPack = source["isPack"];
 	        this.packName = source["packName"];
+	        this.parentModFile = source["parentModFile"];
+	        this.locationType = source["locationType"];
+	        this.active = source["active"];
 	        this.title = source["title"];
 	        this.width = source["width"];
 	        this.height = source["height"];

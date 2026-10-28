@@ -22,18 +22,21 @@ type ModItem struct {
 
 // MapItem 代表一张铁锈战争地图
 type MapItem struct {
-	ID          string `json:"id"`          // 唯一标识 (通常为文件名或相对路径)
-	FileName    string `json:"fileName"`    // 地图文件名 (如 "1917-流血的城市.tmx")
-	FilePath    string `json:"filePath"`    // 绝对路径
-	IsPack      bool   `json:"isPack"`      // 是否内嵌在 .rwmod 地图包中
-	PackName    string `json:"packName"`    // 所属地图包名称 (若有)
-	Title       string `json:"title"`       // 显示标题
-	Width       int    `json:"width"`       // 地图瓦片宽度
-	Height      int    `json:"height"`      // 地图瓦片高度
-	PlayerCount int    `json:"playerCount"` // 推荐玩家数 (2P~23P)
-	HasPreview  bool   `json:"hasPreview"`  // 是否存在对应 _map.png 缩略图
-	PreviewData string `json:"previewData"` // Base64 缩略图数据 (data:image/png;base64,...)
-	FileSize    int64  `json:"fileSize"`    // 文件大小 (字节)
+	ID               string `json:"id"`               // 唯一标识 (通常为文件名或相对路径)
+	FileName         string `json:"fileName"`         // 地图文件名 (如 "1917-流血的城市.tmx")
+	FilePath         string `json:"filePath"`         // 绝对路径或包路径
+	IsPack           bool   `json:"isPack"`           // 是否来自 .rwmod 包
+	PackName         string `json:"packName"`         // 所属包名称 (若有)
+	ParentModFile    string `json:"parentModFile"`    // 所属宿主模组文件名 (用于联动启禁用)
+	LocationType     string `json:"locationType"`     // "standalone" (独立地图) | "map_pack" (地图包) | "unit_mod" (模组附带战役/遭遇战地图)
+	Active           bool   `json:"active"`           // 当前在游戏中是否处于可用/激活状态
+	Title            string `json:"title"`            // 显示标题
+	Width            int    `json:"width"`            // 地图瓦片宽度
+	Height           int    `json:"height"`           // 地图瓦片高度
+	PlayerCount      int    `json:"playerCount"`      // 推荐玩家数 (2P~24P)
+	HasPreview       bool   `json:"hasPreview"`       // 是否存在对应 _map.png 缩略图
+	PreviewData      string `json:"previewData"`      // Base64 缩略图数据 (data:image/png;base64,...)
+	FileSize         int64  `json:"fileSize"`         // 文件大小 (字节)
 }
 
 // GameStatus 游戏客户端状态摘要
@@ -45,6 +48,7 @@ type GameStatus struct {
 	EnabledMods  int    `json:"enabledMods"`  // 启用的模组数
 	DisabledMods int    `json:"disabledMods"` // 禁用的模组数
 	TotalMaps    int    `json:"totalMaps"`    // 地图总数
+	ActiveMaps   int    `json:"activeMaps"`   // 处于激活状态的地图总数
 }
 
 // LaunchConfig 游戏启动配置项
@@ -57,8 +61,26 @@ type LaunchConfig struct {
 	ExtraArgs      string `json:"extraArgs"`      // 附加命令行参数
 }
 
+// GamePreferences 游戏内置画质与性能参数 (读取并同步至 preferences.ini)
+type GamePreferences struct {
+	HighRefreshRate         bool    `json:"highRefreshRate"`         // 解锁高刷新率 (144Hz/165Hz+)
+	RenderVsync             bool    `json:"renderVsync"`             // 垂直同步 V-Sync
+	ShowFps                 bool    `json:"showFps"`                 // 显示游戏内 FPS 计数器
+	RenderSmoothDelta       bool    `json:"renderSmoothDelta"`       // 平滑帧时间差
+	RenderAntiAlias         bool    `json:"renderAntiAlias"`         // 抗锯齿
+	RenderFancyWater        bool    `json:"renderFancyWater"`        // 高品质动态水面
+	RenderClouds            bool    `json:"renderClouds"`            // 云层阴影
+	RenderExtraShadows      bool    `json:"renderExtraShadows"`      // 额外高精度阴影
+	TeamShaders             bool    `json:"teamShaders"`             // 着色器队伍特效
+	NewRender               bool    `json:"newRender"`               // 实验性新渲染管线
+	TeamUnitCapSinglePlayer int     `json:"teamUnitCapSinglePlayer"` // 单人遭遇战队伍单位上限 (默认 5000)
+	TeamUnitCapHostedGame   int     `json:"teamUnitCapHostedGame"`   // 多人联机主机队伍单位上限 (默认 2000)
+	UiRenderScale           float64 `json:"uiRenderScale"`           // UI 界面缩放倍率 (默认 1.0)
+}
+
 // AppConfig 管理器自身的全局配置
 type AppConfig struct {
-	GameDir      string       `json:"gameDir"`
-	LaunchConfig LaunchConfig `json:"launchConfig"`
+	GameDir         string          `json:"gameDir"`
+	LaunchConfig    LaunchConfig    `json:"launchConfig"`
+	GamePreferences GamePreferences `json:"gamePreferences"`
 }

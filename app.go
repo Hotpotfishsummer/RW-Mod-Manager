@@ -28,7 +28,7 @@ func NewApp() *App {
 	gameSvc := services.NewGameService()
 	prefSvc := services.NewPrefService()
 	modSvc := services.NewModService(prefSvc)
-	mapSvc := services.NewMapService()
+	mapSvc := services.NewMapService(prefSvc)
 	launchSvc := services.NewLaunchService()
 
 	return &App{
@@ -49,11 +49,20 @@ func (a *App) shutdown(ctx context.Context) {
 
 // GetConfig 获取当前配置
 func (a *App) GetConfig() models.AppConfig {
-	return a.gameService.Config
+	cfg := a.gameService.Config
+	if a.gameService.ValidateGameDir(cfg.GameDir) {
+		if prefs, err := a.prefService.ReadGamePreferences(cfg.GameDir); err == nil {
+			cfg.GamePreferences = prefs
+		}
+	}
+	return cfg
 }
 
 // SaveConfig 保存用户配置 (如启动参数等)
 func (a *App) SaveConfig(cfg models.AppConfig) error {
+	if a.gameService.ValidateGameDir(cfg.GameDir) {
+		_ = a.prefService.SaveGamePreferences(cfg.GameDir, cfg.GamePreferences)
+	}
 	return a.gameService.SaveConfig(cfg)
 }
 
@@ -104,6 +113,11 @@ func (a *App) GetGameStatus() models.GameStatus {
 	maps, err := a.mapService.ScanMaps(dir)
 	if err == nil {
 		status.TotalMaps = len(maps)
+		for _, m := range maps {
+			if m.Active {
+				status.ActiveMaps++
+			}
+		}
 	}
 
 	return status
@@ -125,7 +139,6 @@ func (a *App) ToggleMod(fileName string, enabled bool) error {
 		return fmt.Errorf("游戏路径未配置或无效")
 	}
 
-	// 重新读取现有所有状态，更新该项后写回
 	currentMods, err := a.modService.ScanMods(dir)
 	if err != nil {
 		return err
@@ -163,13 +176,59 @@ func (a *App) BatchToggleMods(enableAll bool) error {
 	return a.prefService.SaveModSettings(dir, statusMap)
 }
 
-// ScanMaps 扫描并返回所有地图
+// ScanMaps 扫描并返回所有地图 (包含独立地图与所有模组中附带的地图)
 func (a *App) ScanMaps() ([]models.MapItem, error) {
 	dir := a.gameService.Config.GameDir
 	if !a.gameService.ValidateGameDir(dir) {
 		return nil, fmt.Errorf("游戏路径未配置或无效")
 	}
 	return a.mapService.ScanMaps(dir)
+}
+
+// ActivateMapParentMod 一键激活该地图所属的宿主模组
+func (a *App) ActivateMapParentMod(parentModFile string) error {
+	if parentModFile == "" {
+		return nil
+	}
+	return a.ToggleMod(parentModFile, true)
+}
+
+// GenerateMapThumbnail 为指定地图生成高清缩略图 (带 1,2,3... 出生点)
+func (a *App) GenerateMapThumbnail(tmxPath string) (string, error) {
+	dir := a.gameService.Config.GameDir
+	if !a.gameService.ValidateGameDir(dir) {
+		return "", fmt.Errorf("游戏路径未配置或无效")
+	}
+	return a.mapService.GenerateThumbnail(dir, tmxPath)
+}
+
+// BatchGenerateThumbnails 批量扫描为缺失缩略图的地图生成预览
+func (a *App) BatchGenerateThumbnails() (int, error) {
+	dir := a.gameService.Config.GameDir
+	if !a.gameService.ValidateGameDir(dir) {
+		return 0, fmt.Errorf("游戏路径未配置或无效")
+	}
+	return a.mapService.BatchGenerateMissingThumbnails(dir)
+}
+
+// GetGamePreferences 获取 preferences.ini 中的内置画质、高刷与帧率参数
+func (a *App) GetGamePreferences() (models.GamePreferences, error) {
+	dir := a.gameService.Config.GameDir
+	if !a.gameService.ValidateGameDir(dir) {
+		return models.GamePreferences{}, fmt.Errorf("游戏路径未配置或无效")
+	}
+	return a.prefService.ReadGamePreferences(dir)
+}
+
+// SaveGamePreferences 保存画质、高刷、垂直同步与单位上限等设置
+func (a *App) SaveGamePreferences(prefs models.GamePreferences) error {
+	dir := a.gameService.Config.GameDir
+	if !a.gameService.ValidateGameDir(dir) {
+		return fmt.Errorf("游戏路径未配置或无效")
+	}
+	a.gameService.Config.GamePreferences = prefs
+	_ = a.gameService.SaveConfig(a.gameService.Config)
+	return a.prefService.SaveGamePreferences(dir, prefs)
 }
 
 // LaunchGame 拉起启动铁锈战争游戏
