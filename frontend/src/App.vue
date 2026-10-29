@@ -942,33 +942,34 @@ onMounted(() => {
 <template>
   <div class="flex flex-col h-screen w-screen overflow-hidden font-sans">
     <!-- 顶部导航栏 (Material Design 3 Top App Bar) -->
-    <header class="flex items-center justify-between px-6 py-3.5 bg-m3-surface-low border-b border-m3-outline-variant shrink-0">
-      <div class="flex items-center gap-5">
+    <header class="flex items-center justify-between px-6 py-3 bg-m3-surface-low border-b border-m3-outline-variant shrink-0 gap-4">
+      <!-- 左侧：品牌信息与全局连接状态 (纯展示与导航) -->
+      <div class="flex items-center gap-3.5 min-w-0 shrink-0">
         <!-- Logo 与标题 -->
-        <div class="flex items-center gap-3">
-          <div class="w-10 h-10 rounded-2xl bg-m3-primary-container text-m3-primary flex items-center justify-center shadow-m3-1">
+        <div class="flex items-center gap-3 shrink-0">
+          <div class="w-9 h-9 rounded-xl bg-m3-primary-container text-m3-primary flex items-center justify-center shadow-m3-1 shrink-0">
             <Cpu class="w-5 h-5 text-m3-on-primary-container" />
           </div>
-          <div>
-            <h1 class="text-base font-bold tracking-tight text-m3-on-surface">
+          <div class="shrink-0">
+            <h1 class="text-sm font-bold tracking-tight text-m3-on-surface whitespace-nowrap">
               铁锈战争 模组与地图管理器
             </h1>
-            <p class="text-[11px] text-m3-on-surface-variant font-medium tracking-wide">Rusted Warfare Workshop & LAN Sync Manager</p>
+            <p class="text-[10px] text-m3-on-surface-variant font-medium tracking-wide whitespace-nowrap">Rusted Warfare Workshop & LAN Sync Manager</p>
           </div>
         </div>
 
         <!-- 游戏路径状态胶囊 (M3 Assist Chip) -->
-        <div class="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full bg-m3-surface-container border border-m3-outline text-xs">
+        <div class="hidden md:flex items-center h-8 gap-2 px-3 rounded-xl bg-m3-surface-container border border-m3-outline text-xs shrink-0">
           <span
-            class="w-2 h-2 rounded-full"
+            class="w-2 h-2 rounded-full shrink-0"
             :class="gameStatus.isValid ? 'bg-m3-success' : 'bg-m3-error'"
           />
-          <span class="text-m3-on-surface font-mono text-xs truncate max-w-xs" :title="gameStatus.gameDir">
+          <span class="text-m3-on-surface font-mono text-xs truncate max-w-[140px] xl:max-w-xs whitespace-nowrap" :title="gameStatus.gameDir">
             {{ gameStatus.gameDir || '未配置游戏路径' }}
           </span>
           <button
             @click="handleChangeDir"
-            class="ml-1 text-m3-primary hover:text-m3-primary-hover font-medium transition"
+            class="ml-1 text-m3-primary hover:text-m3-primary-hover font-medium transition whitespace-nowrap"
           >
             更换
           </button>
@@ -977,7 +978,7 @@ onMounted(() => {
         <!-- 局域网状态胶囊 (M3 Status Chip) -->
         <div
           @click="currentTab = 'lan'"
-          class="cursor-pointer hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium transition hover:brightness-110"
+          class="cursor-pointer hidden lg:flex items-center h-8 gap-2 px-3 rounded-xl border text-xs font-medium transition hover:brightness-110 shrink-0 whitespace-nowrap"
           :class="
             lanStatus.hasServerConflict
               ? 'bg-m3-error-container/70 border-m3-error/60 text-m3-on-error-container animate-pulse'
@@ -990,11 +991,11 @@ onMounted(() => {
               : 'bg-m3-surface-container border-m3-outline text-m3-on-surface-variant'
           "
         >
-          <AlertTriangle v-if="lanStatus.hasServerConflict" class="w-3.5 h-3.5 text-m3-error" />
-          <Server v-else-if="lanStatus.role === 'server'" class="w-3.5 h-3.5 text-m3-primary" />
-          <Wifi v-else-if="lanStatus.activeServer && syncDiff?.isInSync" class="w-3.5 h-3.5 text-m3-success" />
-          <ArrowRightLeft v-else-if="lanStatus.activeServer" class="w-3.5 h-3.5 text-m3-warning" />
-          <WifiOff v-else class="w-3.5 h-3.5 text-m3-on-surface-dim" />
+          <AlertTriangle v-if="lanStatus.hasServerConflict" class="w-3.5 h-3.5 text-m3-error shrink-0" />
+          <Server v-else-if="lanStatus.role === 'server'" class="w-3.5 h-3.5 text-m3-primary shrink-0" />
+          <Wifi v-else-if="lanStatus.activeServer && syncDiff?.isInSync" class="w-3.5 h-3.5 text-m3-success shrink-0" />
+          <ArrowRightLeft v-else-if="lanStatus.activeServer" class="w-3.5 h-3.5 text-m3-warning shrink-0" />
+          <WifiOff v-else class="w-3.5 h-3.5 text-m3-on-surface-dim shrink-0" />
 
           <span v-if="lanStatus.hasServerConflict" class="font-bold">服务端冲突！</span>
           <span v-else-if="lanStatus.role === 'server'">房主主机 ({{ peers?.length || 0 }} 在线)</span>
@@ -1002,98 +1003,103 @@ onMounted(() => {
           <span v-else-if="lanStatus.activeServer">房主: {{ lanStatus.activeServer.deviceName }} [待同步]</span>
           <span v-else>客户端模式 (搜寻房主中...)</span>
         </div>
+      </div>
 
-        <!-- 顶部快速角色切换器 (M3 Segmented Button) -->
-        <div class="hidden sm:flex items-center rounded-full bg-m3-surface-container border border-m3-outline p-0.5 text-xs font-medium">
+      <!-- 右侧全局操作区 (所有工具按统一规格 h-8, rounded-xl 布局) -->
+      <div class="flex items-center gap-2.5 shrink-0">
+        <!-- 1. 顶部快速角色切换器 (M3 Segmented Button) -->
+        <div class="hidden sm:flex items-center h-8 rounded-xl bg-m3-surface-container border border-m3-outline p-0.5 shrink-0">
           <button
             @click="handleSwitchRole('client')"
             title="设为客户端 (参与对战成员，游戏预设以房主为准自动同步)"
-            class="px-3 py-1 rounded-full transition flex items-center gap-1.5"
-            :class="lanStatus.role === 'client' ? 'bg-m3-primary text-white font-semibold shadow-sm' : 'text-m3-on-surface-variant hover:text-m3-on-surface'"
+            class="h-7 px-3 rounded-lg transition flex items-center gap-1.5 text-xs font-medium whitespace-nowrap"
+            :class="lanStatus.role === 'client' ? 'bg-m3-primary text-white font-semibold shadow-sm' : 'text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-high'"
           >
-            <UserCheck class="w-3.5 h-3.5" /> 客户端
+            <UserCheck class="w-3.5 h-3.5 shrink-0" />
+            <span>客户端</span>
           </button>
           <button
             @click="handleSwitchRole('server')"
             title="设为服务端 (局域网房主，将发布模组预设并充当主机)"
-            class="px-3 py-1 rounded-full transition flex items-center gap-1.5"
-            :class="lanStatus.role === 'server' ? 'bg-m3-primary text-white font-semibold shadow-sm' : 'text-m3-on-surface-variant hover:text-m3-on-surface'"
+            class="h-7 px-3 rounded-lg transition flex items-center gap-1.5 text-xs font-medium whitespace-nowrap"
+            :class="lanStatus.role === 'server' ? 'bg-m3-primary text-white font-semibold shadow-sm' : 'text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-high'"
           >
-            <Server class="w-3.5 h-3.5" /> 房主服务端
+            <Server class="w-3.5 h-3.5 shrink-0" />
+            <span>房主服务端</span>
           </button>
         </div>
-      </div>
 
-      <!-- 右侧全局操作区 -->
-      <div class="flex items-center gap-2.5">
-        <!-- 目录快速打开 (M3 Outlined Button Group) -->
-        <div class="flex items-center rounded-xl bg-m3-surface-container p-0.5 border border-m3-outline">
+        <!-- 角色切换与文件夹组之间的微型分割线 -->
+        <div class="hidden sm:block h-4 w-px bg-m3-outline shrink-0 mx-0.5" />
+
+        <!-- 2. 目录快速打开 (M3 Outlined Button Group) -->
+        <div class="flex items-center h-8 rounded-xl bg-m3-surface-container border border-m3-outline p-0.5 shrink-0">
           <button
             @click="api.openFolder('units')"
             title="打开单位模组文件夹"
-            class="px-2.5 py-1.5 text-xs font-medium text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-high rounded-lg transition flex items-center gap-1.5"
+            class="h-7 px-2.5 text-xs font-medium text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-high rounded-lg transition flex items-center gap-1.5 whitespace-nowrap"
           >
-            <FolderOpen class="w-3.5 h-3.5 text-m3-primary" />
+            <FolderOpen class="w-3.5 h-3.5 text-m3-primary shrink-0" />
             <span>模组</span>
           </button>
           <button
             @click="api.openFolder('maps')"
             title="打开地图文件夹"
-            class="px-2.5 py-1.5 text-xs font-medium text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-high rounded-lg transition flex items-center gap-1.5"
+            class="h-7 px-2.5 text-xs font-medium text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-high rounded-lg transition flex items-center gap-1.5 whitespace-nowrap"
           >
-            <FolderOpen class="w-3.5 h-3.5 text-m3-success" />
+            <FolderOpen class="w-3.5 h-3.5 text-m3-success shrink-0" />
             <span>地图</span>
           </button>
         </div>
 
-        <!-- 刷新按钮 (M3 Icon Button) -->
+        <!-- 3. 刷新按钮 (M3 Icon Button) -->
         <button
           @click="loadAllData"
           :disabled="loading"
-          class="p-2 text-m3-on-surface-variant hover:text-m3-on-surface bg-m3-surface-container hover:bg-m3-surface-high border border-m3-outline rounded-xl transition disabled:opacity-40"
+          class="h-8 w-8 text-m3-on-surface-variant hover:text-m3-on-surface bg-m3-surface-container hover:bg-m3-surface-high border border-m3-outline rounded-xl flex items-center justify-center transition disabled:opacity-40 shrink-0"
           title="刷新扫描"
         >
-          <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
+          <RefreshCw class="w-4 h-4 shrink-0" :class="{ 'animate-spin': loading }" />
         </button>
 
-        <!-- 版本号与更新检查胶囊 (M3 Assist Chip) -->
+        <!-- 4. 版本号与更新检查胶囊 (M3 Assist Chip) -->
         <button
           v-if="updateInfo?.hasUpdate"
           @click="showUpdateModal = true"
-          class="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-xs font-semibold flex items-center gap-1.5 transition active:scale-95 animate-pulse shadow-sm"
+          class="h-8 px-3 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-xs font-semibold flex items-center gap-1.5 transition active:scale-95 animate-pulse shadow-sm shrink-0 whitespace-nowrap"
           title="检测到新版本，点击查看并一键自更新"
         >
-          <Sparkles class="w-3.5 h-3.5 text-amber-400" />
+          <Sparkles class="w-3.5 h-3.5 text-amber-400 shrink-0" />
           <span>新版 v{{ updateInfo.latestVersion }}</span>
         </button>
         <button
           v-else
           @click="handleCheckUpdate(false)"
           :disabled="checkingUpdate"
-          class="px-2.5 py-1.5 rounded-xl bg-m3-surface-container hover:bg-m3-surface-high border border-m3-outline text-m3-on-surface-variant hover:text-m3-on-surface text-[11px] font-mono flex items-center gap-1.5 transition disabled:opacity-50"
+          class="h-8 px-2.5 rounded-xl bg-m3-surface-container hover:bg-m3-surface-high border border-m3-outline text-m3-on-surface-variant hover:text-m3-on-surface text-[11px] font-mono flex items-center gap-1.5 transition disabled:opacity-50 shrink-0 whitespace-nowrap"
           title="点击检查局域网与 GitHub 更新"
         >
-          <ArrowUpCircle class="w-3.5 h-3.5 text-m3-primary" :class="{ 'animate-spin': checkingUpdate }" />
+          <ArrowUpCircle class="w-3.5 h-3.5 text-m3-primary shrink-0" :class="{ 'animate-spin': checkingUpdate }" />
           <span>v{{ currentVersion }}</span>
         </button>
 
-        <!-- 双模启动按钮组 (M3 Filled & Tonal Buttons) -->
-        <div class="flex items-center gap-2">
+        <!-- 5. 双模启动按钮组 (M3 Filled & Tonal Buttons) -->
+        <div class="flex items-center gap-2 shrink-0">
           <!-- 联机模式启动 (M3 Filled Primary Button) -->
           <button
             @click="handleLaunchOnline"
             :disabled="launching || !gameStatus.isValid || lanStatus.hasServerConflict"
-            class="flex items-center gap-2 px-4 py-2 bg-m3-primary hover:bg-m3-primary-hover text-white font-semibold text-xs rounded-xl shadow-m3-1 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            class="h-8 flex items-center gap-2 px-3.5 bg-m3-primary hover:bg-m3-primary-hover text-white font-semibold text-xs rounded-xl shadow-m3-1 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap shrink-0"
             :title="lanStatus.role === 'server' ? '以房主服务端启动：发布当前模组预设并启动游戏' : '以客户端启动：自动对齐房主预设后启动游戏'"
           >
-            <Rocket class="w-4 h-4" :class="{ 'animate-bounce': launching }" />
+            <Rocket class="w-3.5 h-3.5 shrink-0" :class="{ 'animate-bounce': launching }" />
             <span>
               {{
                 launching
                   ? '启动中...'
                   : lanStatus.role === 'server'
-                  ? '房主启动 (广播预设)'
-                  : '联机启动 (自动同步)'
+                  ? '房主启动'
+                  : '联机启动'
               }}
             </span>
           </button>
@@ -1102,10 +1108,10 @@ onMounted(() => {
           <button
             @click="handleLaunchSingle"
             :disabled="launching || !gameStatus.isValid"
-            class="flex items-center gap-1.5 px-3 py-2 bg-m3-surface-container hover:bg-m3-surface-high text-m3-on-surface border border-m3-outline font-medium text-xs rounded-xl transition active:scale-95 disabled:opacity-40"
+            class="h-8 flex items-center gap-1.5 px-3 bg-m3-surface-container hover:bg-m3-surface-high text-m3-on-surface border border-m3-outline font-medium text-xs rounded-xl transition active:scale-95 disabled:opacity-40 whitespace-nowrap shrink-0"
             title="以单机模式启动：使用本地当前模组配置，不检查局域网预设冲突"
           >
-            <Play class="w-3.5 h-3.5 text-m3-on-surface-variant" />
+            <Play class="w-3.5 h-3.5 text-m3-on-surface-variant shrink-0" />
             <span>单机启动</span>
           </button>
         </div>
