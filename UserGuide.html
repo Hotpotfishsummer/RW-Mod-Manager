@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>铁锈战争 模组与地图管理器 - 软件使用说明书</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --surface-high: #334155;
+      --primary: #38bdf8;
+      --primary-dim: #0284c7;
+      --primary-bg: rgba(56, 189, 248, 0.12);
+      --success: #34d399;
+      --success-bg: rgba(52, 211, 153, 0.12);
+      --warning: #fbbf24;
+      --warning-bg: rgba(251, 191, 36, 0.12);
+      --danger: #f87171;
+      --danger-bg: rgba(248, 113, 113, 0.12);
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --border: #334155;
+      --border-light: rgba(255, 255, 255, 0.08);
+      --radius: 12px;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      line-height: 1.6;
+      padding: 32px 16px;
+    }
+
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+    }
+
+    header {
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.15), rgba(129, 140, 248, 0.08));
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 32px 28px;
+      margin-bottom: 28px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 12px;
+      background: var(--primary-bg);
+      color: var(--primary);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+    }
+
+    h1 {
+      font-size: 26px;
+      font-weight: 800;
+      color: #fff;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .subtitle {
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    .toc {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      margin-bottom: 32px;
+    }
+
+    .toc h2 {
+      font-size: 14px;
+      color: var(--primary);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .toc-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 8px 16px;
+      list-style: none;
+    }
+
+    .toc-grid a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 13px;
+      transition: color 0.15s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .toc-grid a:hover {
+      color: #fff;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+
+    .card h2 {
+      font-size: 18px;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border-light);
+    }
+
+    .card h3 {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--primary);
+      margin: 18px 0 8px 0;
+    }
+
+    p {
+      font-size: 13px;
+      color: #cbd5e1;
+      margin-bottom: 12px;
+      line-height: 1.7;
+    }
+
+    ul, ol {
+      margin-left: 20px;
+      margin-bottom: 16px;
+      font-size: 13px;
+      color: #cbd5e1;
+    }
+
+    li {
+      margin-bottom: 6px;
+    }
+
+    .callout {
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin: 14px 0;
+      font-size: 12px;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      line-height: 1.6;
+    }
+
+    .callout-info {
+      background: var(--primary-bg);
+      border-left: 4px solid var(--primary);
+      color: #bae6fd;
+    }
+
+    .callout-success {
+      background: var(--success-bg);
+      border-left: 4px solid var(--success);
+      color: #a7f3d0;
+    }
+
+    .callout-warning {
+      background: var(--warning-bg);
+      border-left: 4px solid var(--warning);
+      color: #fde68a;
+    }
+
+    .callout-danger {
+      background: var(--danger-bg);
+      border-left: 4px solid var(--danger);
+      color: #fecaca;
+    }
+
+    .step-box {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--border-light);
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin-bottom: 12px;
+    }
+
+    .step-num {
+      display: inline-block;
+      width: 22px;
+      height: 22px;
+      line-height: 22px;
+      text-align: center;
+      border-radius: 50%;
+      background: var(--primary);
+      color: #0f172a;
+      font-weight: 700;
+      font-size: 11px;
+      margin-right: 6px;
+    }
+
+    .code-tag {
+      font-family: var(--font-mono);
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid var(--border-light);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: #e2e8f0;
+      font-size: 11px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0;
+      font-size: 12px;
+    }
+
+    th, td {
+      border: 1px solid var(--border);
+      padding: 10px 14px;
+      text-align: left;
+    }
+
+    th {
+      background: rgba(0, 0, 0, 0.25);
+      color: var(--primary);
+      font-weight: 600;
+    }
+
+    tr:nth-child(even) {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    footer {
+      text-align: center;
+      padding: 24px 0 12px 0;
+      color: var(--text-muted);
+      font-size: 12px;
+      border-top: 1px solid var(--border);
+      margin-top: 36px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <!-- Header -->
+    <header>
+      <div class="badge">Rusted Warfare Manager v1.0.0</div>
+      <h1>🎮 铁锈战争 模组与地图管理器 · 使用说明书</h1>
+      <p class="subtitle">专为《铁锈战争》打造的跨代工坊管理、原生出生点战术标绘、局域网联机预设同步与 P2P 极速自更新一体化工具</p>
+    </header>
+
+    <!-- 目录导览 -->
+    <nav class="toc">
+      <h2>📌 快速目录索引</h2>
+      <ul class="toc-grid">
+        <li><a href="#quick-start">⚡ 1. 快速上手与路径配置</a></li>
+        <li><a href="#mod-manager">📦 2. 单位模组管理 (Units)</a></li>
+        <li><a href="#map-renderer">🗺️ 3. 战术地图与出生点序号标绘</a></li>
+        <li><a href="#lan-sync">🌐 4. 局域网联机预设自动同步</a></li>
+        <li><a href="#launcher">🚀 5. 游戏启动与高刷新率调优</a></li>
+        <li><a href="#updater">🔄 6. 双通道智能自更新体系</a></li>
+        <li><a href="#faq">❓ 7. 常见问题与排错指南</a></li>
+      </ul>
+    </nav>
+
+    <!-- 1. 快速上手与路径配置 -->
+    <section id="quick-start" class="card">
+      <h2>⚡ 1. 快速上手与路径配置</h2>
+      <p>初次打开本软件时，管理器会自动探查系统常见安装位置（Steam 目录、桌面快捷方式关联路径等）。</p>
+
+      <div class="step-box">
+        <span class="step-num">1</span>
+        <strong>游戏根目录核验：</strong>
+        <p style="margin-top: 6px;">观察顶部导航栏正中绿色胶囊状态。若显示 <span class="code-tag">未配置游戏路径</span> 或红色异常圆点，请点击右侧的 <strong>“更换”</strong> 按钮，选中您的《铁锈战争》游戏本体所在文件夹（必须包含 <span class="code-tag">game-lib.jar</span> 与 <span class="code-tag">preferences.ini</span>）。</p>
+      </div>
+
+      <div class="step-box">
+        <span class="step-num">2</span>
+        <strong>全量自动加载：</strong>
+        <p style="margin-top: 6px;">路径验证通过后，管理器将自动完成所有模组、地图与游戏参数的秒级高速扫描，并在首页呈现完整的管理工作区。</p>
+      </div>
+
+      <div class="callout callout-info">
+        <span>💡 <strong>提示：</strong>若随时手动往游戏文件夹拖入了新的模组或地图，可直接点击顶部右侧的 <strong>刷新图标 (⟳)</strong> 重新扫描。</span>
+      </div>
+    </section>
+
+    <!-- 2. 单位模组管理 -->
+    <section id="mod-manager" class="card">
+      <h2>📦 2. 单位模组管理 (Units)</h2>
+      <p>全面取代繁琐的在游戏内一级级点开模组面板，支持模组的实时启禁用、搜索过滤与快速归类。</p>
+
+      <h3>主要操作指南</h3>
+      <ul>
+        <li><strong>单个模组切换：</strong>点击卡片右下角的开关或启用/禁用药丸按钮，即可直接写入 <span class="code-tag">preferences.ini</span>，生效状态毫秒级持久化。</li>
+        <li><strong>一键全开 / 一键全关：</strong>在模组标签页右上角点击“一键全部启用”或“一键全部禁用”，适合需要快速排查冲突或大换包场景。</li>
+        <li><strong>视图模式切换：</strong>支持 <strong>卡片大图模式 (Grid)</strong> 与 <strong>紧凑高密度清单模式 (List)</strong> 自由切换。</li>
+        <li><strong>关键字搜索与分类筛选：</strong>支持按模组英文原名、中文译名、文件名、分类标签搜索，或仅查看“已启用” / “已禁用”模组。</li>
+        <li><strong>打开外部工坊：</strong>若模组附带 Steam 创意工坊 ID，点击卡片上的工坊链接可一键直达 Steam 工坊详情页。</li>
+      </ul>
+    </section>
+
+    <!-- 3. 战术地图工坊与出生点序号标绘 -->
+    <section id="map-renderer" class="card">
+      <h2>🗺️ 3. 战术地图工坊与出生点序号标绘</h2>
+      <p>本管理器独创了纯 Go 原生 TMX 地图解析与出生点序号渲染引擎，<strong>无需安装任何 Python 或外部工具</strong>，单程序开箱即用。</p>
+
+      <h3>特色功能解析</h3>
+      <ul>
+        <li><strong>全类型地图识别：</strong>不仅支持独立存放在 <span class="code-tag">mods/maps</span> 的单个地图与文件夹地图，还会深度穿透扫描 <span class="code-tag">mods/units</span> 下所有 <span class="code-tag">.rwmod</span> 模组包中附带的内嵌地图。</li>
+        <li><strong>战术出生点序号自动标绘：</strong>自动读取地图内的队伍标记点（Team 1, Team 2, Team 3...），并在地图渲染图层上直接叠加高对比度的战术圆形编号标志。</li>
+        <li><strong>一键补齐或全量重绘：</strong>
+          <ul>
+            <li>点击 <strong>“批量生成缩略图”</strong>：仅为当前尚无预览图的地图快速补充出生点标注。</li>
+            <li>点击 <strong>“全量强制重绘”</strong>：对所有已有地图（含旧的未标记图）进行全量出生点重新计算与重写。</li>
+          </ul>
+        </li>
+        <li><strong>大图灯箱预览 (Lightbox)：</strong>点击任意地图缩略图即可呼出全屏高清大图，支持鼠标滚轮缩放、自适应居中与全屏战术研讨。</li>
+        <li><strong>宿主模组联动激活：</strong>对于内嵌在单位模组内的地图，点击弹窗中的 <strong>“一键激活宿主模组”</strong>，即可连带将对应的武器模组自动启用，确保战局单位不丢失。</li>
+      </ul>
+    </section>
+
+    <!-- 4. 局域网联机预设自动同步 -->
+    <section id="lan-sync" class="card">
+      <h2>🌐 4. 局域网联机预设自动同步</h2>
+      <p>专为局域网联机对战解决“有人缺模组进不去”、“谁启用了变态单位对不上”、“对战版本不一致”等顽疾，构建了严格的客户端-服务端体系。</p>
+
+      <div class="callout callout-warning">
+        <span>⚠️ <strong>规则原则：</strong>同一个网络/子网集合内，<strong>严格只能有 1 个服务端作为房主主机</strong>，其余成员均必须作为客户端。若检测到多个服务端，将全面弹出红色仲裁告警并锁定联机启动。</span>
+      </div>
+
+      <h3>模式职责与使用流程</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>角色模式</th>
+            <th>默认状态</th>
+            <th>核心职责与行为</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>客户端 (Client)</strong></td>
+            <td>默认角色</td>
+            <td>自动监听局域网心跳广播；启动联机前自动向房主查询预设差异；若本地缺少模组/地图，将自动从房主电脑下载补齐，并将启用状态调整得与房主完全相同。</td>
+          </tr>
+          <tr>
+            <td><strong>服务端 (Server/房主)</strong></td>
+            <td>需手动切换</td>
+            <td>充当本场对战标准源；通过 UDP 广播自身 IP、端口与动态特征哈希；通过内置 HTTP 传输服务为队员提供模组下载；支持接收队员推送的新模组。</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>主要联机操作说明</h3>
+      <ul>
+        <li><strong>切换角色：</strong>在顶部右上角或“局域网联机”选项卡中点击 <strong>“客户端”</strong> 或 <strong>“房主服务端”</strong> 即可秒切。</li>
+        <li><strong>动态启动预设感知：</strong>管理器持续侦听本地模组状态。即使在游戏中按下 <span class="code-tag">Ctrl+F5</span> 重载模组，管理器也会动态刷新预设特征哈希。</li>
+        <li><strong>一键同步房主预设：</strong>客户端连接到房主后，可在面板中查看预设差异详情（缺失哪些模组、哪几个模组状态不符），点击 <strong>“一键同步房主预设”</strong> 即可自动完成下载与启用状态对齐。</li>
+        <li><strong>队员向房主推送模组：</strong>队员想推荐自己制作的好玩模组给房主？在“模组”列表点击 <strong>“向房主推送”</strong>，房主端将收到实时审批弹窗，房主点击“接受”即可自动传送到房主电脑上。</li>
+        <li><strong>多网卡与虚拟专网绑定：</strong>若使用 <strong>Tailscale</strong>、<strong>Radmin VPN</strong>、<strong>蒲公英</strong> 等虚拟局域网联机，请在设置中将“绑定的网络子网”下拉选择为对应的虚拟网卡。</li>
+      </ul>
+    </section>
+
+    <!-- 5. 游戏启动与高刷新率调优 -->
+    <section id="launcher" class="card">
+      <h2>🚀 5. 游戏启动与高刷新率调优 (Launcher)</h2>
+      <p>无需手动摸索复杂的启动命令行参数，所有调优选项均直观可视化配置。</p>
+
+      <h3>双启动模式介绍</h3>
+      <div class="step-box">
+        <strong>🟢 联机启动 (带预设自动同步)：</strong>
+        <p style="margin-top: 4px;">联机开黑专用。启动时会自动校验局域网服务端状态；若为客户端则自动拉取房主预设同步；若检测到多房主冲突则阻断启动，保证进房 100% 预设一致。</p>
+      </div>
+
+      <div class="step-box">
+        <strong>⚪ 单机启动 (自由独立运行)：</strong>
+        <p style="margin-top: 4px;">单人战役或脱机测试专用。完全按照本机当前自己的模组启用状态拉起游戏，不检查局域网房主或冲突。</p>
+      </div>
+
+      <h3>参数与高刷新率调优</h3>
+      <ul>
+        <li><strong>电竞高刷新率支持：</strong>直写 <span class="code-tag">preferences.ini</span> 内置参数，支持 60Hz / 120Hz / 144Hz / 240Hz+ 电竞高刷屏，告别默认锁帧卡顿。</li>
+        <li><strong>JVM 内存上限调整：</strong>可一键拉升至 4096MB / 8192MB，避免大型战役或重度模组轰炸导致 Java 虚拟机内存溢出 (OOM)。</li>
+        <li><strong>垂直同步与 FPS 帧率显示：</strong>可视化开关，直接随游戏启动生效。</li>
+        <li><strong>队伍单位上限限制：</strong>解除游戏内置造兵总人口限制，畅享大规模战役兵海推进。</li>
+      </ul>
+    </section>
+
+    <!-- 6. 双通道智能自更新体系 -->
+    <section id="updater" class="card">
+      <h2>🔄 6. 双通道智能自更新体系</h2>
+      <p>管理器具备全自动版本侦测与 Windows 在位热替换自升级能力，支持 <strong>局域网 P2P</strong> 与 <strong>GitHub Releases</strong> 双通道。</p>
+
+      <h3>双通道工作原理</h3>
+      <ul>
+        <li><strong>局域网 P2P 极速通道 (零流量首选)：</strong>在离线对战房或无公网局域网内，只要任意一台电脑（无论是房主还是队员）运行的是新版本，其他电脑打开管理器时就会通过广播信标自动侦测到新版，并以局域网千兆/百兆内网速度直连拉取新版程序完成秒更。</li>
+        <li><strong>GitHub Releases 官方通道 (全球公网备用)：</strong>当电脑处于互联网环境时，管理器会自动请求 GitHub 官方仓库获取正式发布版本。</li>
+        <li><strong>Windows 平滑在位热替换：</strong>无需繁琐的安装向导或卸载步骤，更新包下载完成后自动在后台替换可执行文件并唤起重启，旧备份自动清理。</li>
+      </ul>
+
+      <div class="callout callout-success">
+        <span>🎉 <strong>如何触发更新：</strong>启动时管理器会在后台静默自检。一旦有新版，顶部导航栏将亮起金色呼吸徽标 <strong>“✨ 新版 vX.X.X”</strong>，点击即可呼出弹窗一键升级。您也可以随时在“偏好设置”面板中点击“立即检查更新”。</span>
+      </div>
+    </section>
+
+    <!-- 7. 常见问题与排错指南 -->
+    <section id="faq" class="card">
+      <h2>❓ 7. 常见问题与排错指南</h2>
+
+      <h3>Q1：局域网内队员一直显示“搜寻房主中”，找不到房主？</h3>
+      <p><strong>排查要点：</strong></p>
+      <ol>
+        <li>确认房主是否已经打开管理器，并且顶部状态切换为了 <strong>“房主服务端”</strong>（双方都为客户端时无法自动配对）。</li>
+        <li>若使用了虚拟局域网（如 Tailscale/Radmin），请双方在管理器“偏好设置”中的“选择绑定的网络子网”下拉框中，均选中该虚拟网卡的 IP/网段。</li>
+        <li>检查 Windows 防火墙：在弹出的 Windows 防火墙提示中允许本程序的“专用网络”通讯，或暂时关闭防火墙排查。</li>
+      </ol>
+
+      <h3>Q2：弹出“局域网服务端唯一性冲突告警”，无法点击操作？</h3>
+      <p><strong>解决办法：</strong>当前局域网中有两台或更多电脑同时切换为了“房主服务端”。只需冲突双方中任一方在弹窗中点击 <strong>“一键将本机切换为客户端”</strong>，冲突将立即解除，所有功能即可恢复正常。</p>
+
+      <h3>Q3：地图没有缩略图，或者看不到 1, 2, 3 出生点标记？</h3>
+      <p><strong>解决办法：</strong>切换到“地图”选项卡，点击右上角的 <strong>“批量生成缩略图”</strong> 或 <strong>“全量强制重绘”</strong>，管理器将全量高速提取 TMX 地图层并自动合成抗锯齿的战术出生点标志。</p>
+
+      <h3>Q4：在游戏内修改了模组启用状态，管理器能同步吗？</h3>
+      <p><strong>解决办法：</strong>完全可以。管理器对 <span class="code-tag">preferences.ini</span> 具有动态感知能力。即便在游戏内按了 <span class="code-tag">Ctrl+F5</span> 重载模组，返回管理器点击刷新或等待几秒心跳，状态即会自动对齐。</p>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+      <p>铁锈战争 模组与地图管理器 (RW-Mod-Manager) · 基于 Go + Wails v2 + Vue 3 开发</p>
+      <p style="margin-top: 4px;">开源代码仓库：<a href="https://github.com/Hotpotfishsummer/RW-Mod-Manager" target="_blank" style="color: var(--primary); text-decoration: none;">github.com/Hotpotfishsummer/RW-Mod-Manager</a></p>
+    </footer>
+  </div>
+
+</body>
+</html>
