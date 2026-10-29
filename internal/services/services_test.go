@@ -187,4 +187,8 @@ func TestVersionComparisonAndUpdater(t *testing.T) {
 	}
 
 	t.Logf("Peer version detection verified: %+v", peers[0])
+
+	// 3. 测试 GitHub 最新发布版本探测接口
+	ghInfo, err := updateSvc.CheckGithubUpdate()
+	t.Logf("CheckGithubUpdate result: info=%+v, err=%v", ghInfo, err)
 }
