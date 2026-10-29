@@ -6,12 +6,24 @@ export function ActivateMapParentMod(arg1) {
   return window['go']['main']['App']['ActivateMapParentMod'](arg1);
 }
 
-export function BatchGenerateThumbnails() {
-  return window['go']['main']['App']['BatchGenerateThumbnails']();
+export function BatchGenerateThumbnails(arg1) {
+  return window['go']['main']['App']['BatchGenerateThumbnails'](arg1);
 }
 
 export function BatchToggleMods(arg1) {
   return window['go']['main']['App']['BatchToggleMods'](arg1);
+}
+
+export function CheckForUpdates() {
+  return window['go']['main']['App']['CheckForUpdates']();
+}
+
+export function ComparePresetWithServer(arg1, arg2) {
+  return window['go']['main']['App']['ComparePresetWithServer'](arg1, arg2);
+}
+
+export function DownloadAndApplyUpdate(arg1) {
+  return window['go']['main']['App']['DownloadAndApplyUpdate'](arg1);
 }
 
 export function GenerateMapThumbnail(arg1) {
@@ -22,6 +34,18 @@ export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }
 
+export function GetCurrentVersion() {
+  return window['go']['main']['App']['GetCurrentVersion']();
+}
+
+export function GetDiscoveredPeers() {
+  return window['go']['main']['App']['GetDiscoveredPeers']();
+}
+
+export function GetDynamicPreset() {
+  return window['go']['main']['App']['GetDynamicPreset']();
+}
+
 export function GetGamePreferences() {
   return window['go']['main']['App']['GetGamePreferences']();
 }
@@ -30,12 +54,48 @@ export function GetGameStatus() {
   return window['go']['main']['App']['GetGameStatus']();
 }
 
+export function GetLanConfig() {
+  return window['go']['main']['App']['GetLanConfig']();
+}
+
+export function GetLanStatus() {
+  return window['go']['main']['App']['GetLanStatus']();
+}
+
+export function GetNetworkInterfaces() {
+  return window['go']['main']['App']['GetNetworkInterfaces']();
+}
+
+export function GetPendingPushRequests() {
+  return window['go']['main']['App']['GetPendingPushRequests']();
+}
+
+export function HandlePushDecision(arg1, arg2) {
+  return window['go']['main']['App']['HandlePushDecision'](arg1, arg2);
+}
+
 export function LaunchGame() {
   return window['go']['main']['App']['LaunchGame']();
 }
 
+export function LaunchGameOnline() {
+  return window['go']['main']['App']['LaunchGameOnline']();
+}
+
+export function LaunchGameSingle() {
+  return window['go']['main']['App']['LaunchGameSingle']();
+}
+
 export function OpenFolder(arg1) {
   return window['go']['main']['App']['OpenFolder'](arg1);
+}
+
+export function RefreshDynamicPreset() {
+  return window['go']['main']['App']['RefreshDynamicPreset']();
+}
+
+export function RequestPushToHost(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['RequestPushToHost'](arg1, arg2, arg3, arg4);
 }
 
 export function SaveConfig(arg1) {
@@ -44,6 +104,10 @@ export function SaveConfig(arg1) {
 
 export function SaveGamePreferences(arg1) {
   return window['go']['main']['App']['SaveGamePreferences'](arg1);
+}
+
+export function SaveLanConfig(arg1) {
+  return window['go']['main']['App']['SaveLanConfig'](arg1);
 }
 
 export function ScanMaps() {
@@ -60,6 +124,14 @@ export function SelectGameDir() {
 
 export function SetGameDir(arg1) {
   return window['go']['main']['App']['SetGameDir'](arg1);
+}
+
+export function SwitchLanRole(arg1) {
+  return window['go']['main']['App']['SwitchLanRole'](arg1);
+}
+
+export function SyncFromHost(arg1, arg2) {
+  return window['go']['main']['App']['SyncFromHost'](arg1, arg2);
 }
 
 export function ToggleMod(arg1, arg2) {

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -241,56 +240,68 @@ func (s *MapService) extractPlayerCount(filename string) int {
 	return 2
 }
 
-// GenerateThumbnail 为指定 TMX 文件生成（或重新生成）带出生点标记的高清缩略图
+// GenerateThumbnail 为指定 TMX 文件生成（或重新生成）带出生点标记的高清缩略图 (100% 纯 Go 原生实现，无外部 Python 依赖)
+// 既支持独立地图文件（如 mods/maps/foo.tmx），也支持 rwmod 包内条目（如 mods/units/pack.rwmod:sub/foo.tmx）
 func (s *MapService) GenerateThumbnail(gameDir string, tmxPath string) (string, error) {
-	// 查找 Python 工具脚本路径 (优先当前工程 scripts/rw_thumbnail.py，回退游戏 tools/rw_thumbnail.py)
-	scriptPath := filepath.Join(gameDir, "tools", "rw_thumbnail.py")
-	if localScript, err := filepath.Abs("scripts/rw_thumbnail.py"); err == nil {
-		if fi, err := os.Stat(localScript); err == nil && !fi.IsDir() {
-			scriptPath = localScript
-		}
+	renderer := NewMapRenderer(gameDir)
+
+	var pngBytes []byte
+	var err error
+
+	if strings.Contains(tmxPath, ".rwmod:") {
+		parts := strings.SplitN(tmxPath, ".rwmod:", 2)
+		packPath := parts[0] + ".rwmod"
+		entryName := parts[1]
+		pngBytes, err = renderer.RenderPackEntry(packPath, entryName, 500)
+	} else {
+		pngBytes, err = renderer.RenderStandalone(tmxPath, 500)
 	}
 
-	if _, err := os.Stat(scriptPath); err != nil {
-		return "", fmt.Errorf("未找到缩略图生成工具脚本 rw_thumbnail.py")
-	}
-
-	baseName := strings.TrimSuffix(tmxPath, filepath.Ext(tmxPath))
-	outPng := baseName + "_map.png"
-
-	cmd := exec.Command("python", scriptPath, "render", tmxPath, "-o", outPng)
-	cmd.Env = append(os.Environ(), "RW_GAME_ROOT="+gameDir)
-	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("生成缩略图失败: %v, 输出: %s", err, string(output))
+		return "", fmt.Errorf("生成缩略图失败: %w", err)
 	}
 
-	// 读取生成的缩略图并返回 Base64
-	data, err := os.ReadFile(outPng)
-	if err != nil {
-		return "", err
-	}
-	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(data), nil
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngBytes), nil
 }
 
-// BatchGenerateMissingThumbnails 批量为 mods/maps/ 中所有缺失缩略图的地图生成预览
-func (s *MapService) BatchGenerateMissingThumbnails(gameDir string) (int, error) {
-	scriptPath := filepath.Join(gameDir, "tools", "rw_thumbnail.py")
-	if localScript, err := filepath.Abs("scripts/rw_thumbnail.py"); err == nil {
-		if fi, err := os.Stat(localScript); err == nil && !fi.IsDir() {
-			scriptPath = localScript
+// BatchGenerateThumbnails 批量扫描为地图生成或全量重绘出生点预览 (100% 纯 Go 原生实现)
+// force 为 true 时强制重新生成覆盖已有旧图；为 false 时仅补齐缺失
+func (s *MapService) BatchGenerateThumbnails(gameDir string, force bool) (int, error) {
+	renderer := NewMapRenderer(gameDir)
+	totalCount := 0
+
+	// 1. 处理独立地图目录 mods/maps
+	mapsDir := filepath.Join(gameDir, "mods", "maps")
+	if fi, err := os.Stat(mapsDir); err == nil && fi.IsDir() {
+		if c, err := renderer.BatchRenderStandalone(mapsDir, force); err == nil {
+			totalCount += c
 		}
 	}
 
-	mapsDir := filepath.Join(gameDir, "mods", "maps")
-	cmd := exec.Command("python", scriptPath, "batch", mapsDir)
-	cmd.Env = append(os.Environ(), "RW_GAME_ROOT="+gameDir)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return 0, fmt.Errorf("批量生成缩略图失败: %v, 输出: %s", err, string(output))
+	// 2. 处理所有 .rwmod 地图包 (mods/units 与 mods/maps 下的 .rwmod)
+	var packs []string
+	for _, sub := range []string{"units", "maps"} {
+		dir := filepath.Join(gameDir, "mods", sub)
+		entries, err := os.ReadDir(dir)
+		if err == nil {
+			for _, e := range entries {
+				if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".rwmod") {
+					packs = append(packs, filepath.Join(dir, e.Name()))
+				}
+			}
+		}
 	}
 
-	// 统计生成行数
-	count := strings.Count(string(output), "->")
-	return count, nil
+	if len(packs) > 0 {
+		if c, err := renderer.BatchPatchPacks(packs, force); err == nil {
+			totalCount += c
+		}
+	}
+
+	return totalCount, nil
+}
+
+// BatchGenerateMissingThumbnails 保持向后兼容
+func (s *MapService) BatchGenerateMissingThumbnails(gameDir string) (int, error) {
+	return s.BatchGenerateThumbnails(gameDir, false)
 }

@@ -16,3 +16,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.log
+__pycache__/
+*.pyc
+internal/services/*.png

@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"github.com/google/uuid"
+
 	"rw_mod_manager/internal/models"
 )
 
@@ -26,6 +29,11 @@ func NewGameService() *GameService {
 		cfgPath = "config.json"
 	}
 
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "RW-Player"
+	}
+
 	s := &GameService{
 		configPath: cfgPath,
 		Config: models.AppConfig{
@@ -36,6 +44,14 @@ func NewGameService() *GameService {
 				NoMods:         false,
 				SafeMode:       false,
 				ExtraArgs:      "",
+			},
+			LanConfig: models.LanConfig{
+				InstanceID:             uuid.New().String(),
+				DeviceName:             hostname,
+				Role:                   models.RoleClient,
+				BroadcastPort:          38567,
+				HttpPort:               38568,
+				AutoAcceptClientPushes: false,
 			},
 		},
 	}
@@ -68,6 +84,23 @@ func (s *GameService) LoadConfig() {
 		if cfg.LaunchConfig.MaxMemoryMB > 0 {
 			s.Config.LaunchConfig = cfg.LaunchConfig
 		}
+		if cfg.LanConfig.InstanceID != "" {
+			s.Config.LanConfig.InstanceID = cfg.LanConfig.InstanceID
+		}
+		if cfg.LanConfig.DeviceName != "" {
+			s.Config.LanConfig.DeviceName = cfg.LanConfig.DeviceName
+		}
+		if cfg.LanConfig.Role != "" {
+			s.Config.LanConfig.Role = cfg.LanConfig.Role
+		}
+		if cfg.LanConfig.BroadcastPort > 0 {
+			s.Config.LanConfig.BroadcastPort = cfg.LanConfig.BroadcastPort
+		}
+		if cfg.LanConfig.HttpPort > 0 {
+			s.Config.LanConfig.HttpPort = cfg.LanConfig.HttpPort
+		}
+		s.Config.LanConfig.SelectedSubnet = cfg.LanConfig.SelectedSubnet
+		s.Config.LanConfig.AutoAcceptClientPushes = cfg.LanConfig.AutoAcceptClientPushes
 	}
 }
 

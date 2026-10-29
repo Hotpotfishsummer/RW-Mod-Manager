@@ -1,5 +1,29 @@
 export namespace models {
 	
+	export class LanConfig {
+	    instanceId: string;
+	    deviceName: string;
+	    role: string;
+	    selectedSubnet: string;
+	    broadcastPort: number;
+	    httpPort: number;
+	    autoAcceptClientPushes: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new LanConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.instanceId = source["instanceId"];
+	        this.deviceName = source["deviceName"];
+	        this.role = source["role"];
+	        this.selectedSubnet = source["selectedSubnet"];
+	        this.broadcastPort = source["broadcastPort"];
+	        this.httpPort = source["httpPort"];
+	        this.autoAcceptClientPushes = source["autoAcceptClientPushes"];
+	    }
+	}
 	export class GamePreferences {
 	    highRefreshRate: boolean;
 	    renderVsync: boolean;
@@ -62,6 +86,7 @@ export namespace models {
 	    gameDir: string;
 	    launchConfig: LaunchConfig;
 	    gamePreferences: GamePreferences;
+	    lanConfig: LanConfig;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -72,6 +97,7 @@ export namespace models {
 	        this.gameDir = source["gameDir"];
 	        this.launchConfig = this.convertValues(source["launchConfig"], LaunchConfig);
 	        this.gamePreferences = this.convertValues(source["gamePreferences"], GamePreferences);
+	        this.lanConfig = this.convertValues(source["lanConfig"], LanConfig);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -120,6 +146,175 @@ export namespace models {
 	    }
 	}
 	
+	export class LanPeer {
+	    instanceId: string;
+	    deviceName: string;
+	    ip: string;
+	    httpPort: number;
+	    role: string;
+	    presetVersion: string;
+	    appVersion: string;
+	    lastSeen: number;
+	    isConflict: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new LanPeer(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.instanceId = source["instanceId"];
+	        this.deviceName = source["deviceName"];
+	        this.ip = source["ip"];
+	        this.httpPort = source["httpPort"];
+	        this.role = source["role"];
+	        this.presetVersion = source["presetVersion"];
+	        this.appVersion = source["appVersion"];
+	        this.lastSeen = source["lastSeen"];
+	        this.isConflict = source["isConflict"];
+	    }
+	}
+	export class LanStatus {
+	    role: string;
+	    instanceId: string;
+	    deviceName: string;
+	    selectedSubnet: string;
+	    localIp: string;
+	    httpPort: number;
+	    hasServerConflict: boolean;
+	    conflictingServers: LanPeer[];
+	    activeServer?: LanPeer;
+	    peerCount: number;
+	    presetVersionHash: string;
+	    appVersion: string;
+	    autoAcceptPushes: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new LanStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.role = source["role"];
+	        this.instanceId = source["instanceId"];
+	        this.deviceName = source["deviceName"];
+	        this.selectedSubnet = source["selectedSubnet"];
+	        this.localIp = source["localIp"];
+	        this.httpPort = source["httpPort"];
+	        this.hasServerConflict = source["hasServerConflict"];
+	        this.conflictingServers = this.convertValues(source["conflictingServers"], LanPeer);
+	        this.activeServer = this.convertValues(source["activeServer"], LanPeer);
+	        this.peerCount = source["peerCount"];
+	        this.presetVersionHash = source["presetVersionHash"];
+	        this.appVersion = source["appVersion"];
+	        this.autoAcceptPushes = source["autoAcceptPushes"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class PresetMapItem {
+	    fileName: string;
+	    title: string;
+	    filePath: string;
+	    locationType: string;
+	    active: boolean;
+	    fileSize: number;
+	    parentModFile: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PresetMapItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.fileName = source["fileName"];
+	        this.title = source["title"];
+	        this.filePath = source["filePath"];
+	        this.locationType = source["locationType"];
+	        this.active = source["active"];
+	        this.fileSize = source["fileSize"];
+	        this.parentModFile = source["parentModFile"];
+	    }
+	}
+	export class PresetModItem {
+	    fileName: string;
+	    title: string;
+	    hash: string;
+	    fileSize: number;
+	    enabled: boolean;
+	    isDir: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new PresetModItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.fileName = source["fileName"];
+	        this.title = source["title"];
+	        this.hash = source["hash"];
+	        this.fileSize = source["fileSize"];
+	        this.enabled = source["enabled"];
+	        this.isDir = source["isDir"];
+	    }
+	}
+	export class LaunchPreset {
+	    id: string;
+	    name: string;
+	    updatedAt: number;
+	    versionHash: string;
+	    mods: PresetModItem[];
+	    maps: PresetMapItem[];
+	
+	    static createFrom(source: any = {}) {
+	        return new LaunchPreset(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.updatedAt = source["updatedAt"];
+	        this.versionHash = source["versionHash"];
+	        this.mods = this.convertValues(source["mods"], PresetModItem);
+	        this.maps = this.convertValues(source["maps"], PresetMapItem);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class MapItem {
 	    id: string;
 	    fileName: string;
@@ -200,6 +395,140 @@ export namespace models {
 	        this.fileSize = source["fileSize"];
 	        this.steamId = source["steamId"];
 	        this.modTime = source["modTime"];
+	    }
+	}
+	export class NetworkInterfaceInfo {
+	    name: string;
+	    ip: string;
+	    mask: string;
+	    subnet: string;
+	    broadcastIp: string;
+	    isDefault: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new NetworkInterfaceInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.ip = source["ip"];
+	        this.mask = source["mask"];
+	        this.subnet = source["subnet"];
+	        this.broadcastIp = source["broadcastIp"];
+	        this.isDefault = source["isDefault"];
+	    }
+	}
+	
+	
+	export class PushRequest {
+	    id: string;
+	    peerId: string;
+	    peerName: string;
+	    peerIp: string;
+	    itemType: string;
+	    fileName: string;
+	    fileSize: number;
+	    status: string;
+	    createdAt: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PushRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.peerId = source["peerId"];
+	        this.peerName = source["peerName"];
+	        this.peerIp = source["peerIp"];
+	        this.itemType = source["itemType"];
+	        this.fileName = source["fileName"];
+	        this.fileSize = source["fileSize"];
+	        this.status = source["status"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
+	export class SyncDiff {
+	    serverPresetHash: string;
+	    clientPresetHash: string;
+	    isInSync: boolean;
+	    missingMods: PresetModItem[];
+	    missingMaps: PresetMapItem[];
+	    stateMismatches: PresetModItem[];
+	    extraModsCount: number;
+	    summary: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SyncDiff(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.serverPresetHash = source["serverPresetHash"];
+	        this.clientPresetHash = source["clientPresetHash"];
+	        this.isInSync = source["isInSync"];
+	        this.missingMods = this.convertValues(source["missingMods"], PresetModItem);
+	        this.missingMaps = this.convertValues(source["missingMaps"], PresetMapItem);
+	        this.stateMismatches = this.convertValues(source["stateMismatches"], PresetModItem);
+	        this.extraModsCount = source["extraModsCount"];
+	        this.summary = source["summary"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class UpdateInfo {
+	    hasUpdate: boolean;
+	    currentVersion: string;
+	    latestVersion: string;
+	    source: string;
+	    providerName: string;
+	    downloadUrl: string;
+	    releaseNotes: string;
+	    fileSize: number;
+	    sha256: string;
+	    publishedAt: string;
+	    lanAvailable: boolean;
+	    lanVersion: string;
+	    githubAvailable: boolean;
+	    githubVersion: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UpdateInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.hasUpdate = source["hasUpdate"];
+	        this.currentVersion = source["currentVersion"];
+	        this.latestVersion = source["latestVersion"];
+	        this.source = source["source"];
+	        this.providerName = source["providerName"];
+	        this.downloadUrl = source["downloadUrl"];
+	        this.releaseNotes = source["releaseNotes"];
+	        this.fileSize = source["fileSize"];
+	        this.sha256 = source["sha256"];
+	        this.publishedAt = source["publishedAt"];
+	        this.lanAvailable = source["lanAvailable"];
+	        this.lanVersion = source["lanVersion"];
+	        this.githubAvailable = source["githubAvailable"];
+	        this.githubVersion = source["githubVersion"];
 	    }
 	}
 

@@ -83,4 +83,5 @@ type AppConfig struct {
 	GameDir         string          `json:"gameDir"`
 	LaunchConfig    LaunchConfig    `json:"launchConfig"`
 	GamePreferences GamePreferences `json:"gamePreferences"`
+	LanConfig       LanConfig       `json:"lanConfig"`
 }

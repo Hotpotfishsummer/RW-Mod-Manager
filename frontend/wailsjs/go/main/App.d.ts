@@ -4,25 +4,57 @@ import {models} from '../models';
 
 export function ActivateMapParentMod(arg1:string):Promise<void>;
 
-export function BatchGenerateThumbnails():Promise<number>;
+export function BatchGenerateThumbnails(arg1:boolean):Promise<number>;
 
 export function BatchToggleMods(arg1:boolean):Promise<void>;
+
+export function CheckForUpdates():Promise<models.UpdateInfo>;
+
+export function ComparePresetWithServer(arg1:string,arg2:number):Promise<models.SyncDiff>;
+
+export function DownloadAndApplyUpdate(arg1:string):Promise<void>;
 
 export function GenerateMapThumbnail(arg1:string):Promise<string>;
 
 export function GetConfig():Promise<models.AppConfig>;
 
+export function GetCurrentVersion():Promise<string>;
+
+export function GetDiscoveredPeers():Promise<Array<models.LanPeer>>;
+
+export function GetDynamicPreset():Promise<models.LaunchPreset>;
+
 export function GetGamePreferences():Promise<models.GamePreferences>;
 
 export function GetGameStatus():Promise<models.GameStatus>;
 
+export function GetLanConfig():Promise<models.LanConfig>;
+
+export function GetLanStatus():Promise<models.LanStatus>;
+
+export function GetNetworkInterfaces():Promise<Array<models.NetworkInterfaceInfo>>;
+
+export function GetPendingPushRequests():Promise<Array<models.PushRequest>>;
+
+export function HandlePushDecision(arg1:string,arg2:boolean):Promise<void>;
+
 export function LaunchGame():Promise<void>;
 
+export function LaunchGameOnline():Promise<void>;
+
+export function LaunchGameSingle():Promise<void>;
+
 export function OpenFolder(arg1:string):Promise<void>;
+
+export function RefreshDynamicPreset():Promise<models.LaunchPreset>;
+
+export function RequestPushToHost(arg1:string,arg2:number,arg3:string,arg4:string):Promise<void>;
 
 export function SaveConfig(arg1:models.AppConfig):Promise<void>;
 
 export function SaveGamePreferences(arg1:models.GamePreferences):Promise<void>;
+
+export function SaveLanConfig(arg1:models.LanConfig):Promise<void>;
 
 export function ScanMaps():Promise<Array<models.MapItem>>;
 
@@ -31,5 +63,9 @@ export function ScanMods():Promise<Array<models.ModItem>>;
 export function SelectGameDir():Promise<string>;
 
 export function SetGameDir(arg1:string):Promise<models.GameStatus>;
+
+export function SwitchLanRole(arg1:string):Promise<void>;
+
+export function SyncFromHost(arg1:string,arg2:number):Promise<void>;
 
 export function ToggleMod(arg1:string,arg2:boolean):Promise<void>;

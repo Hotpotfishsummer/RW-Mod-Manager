@@ -3,18 +3,14 @@
 """
 rw_thumbnail.py - 生成《铁锈战争》(Rusted Warfare) 自定义地图缩略图
 
-原理(经 game-lib.jar 反编译确认):
-  com.corrodinggames.rts.appFramework.c.c(String):
-      return path.replace(".tmx", "") + "_map.png";
-  com.corrodinggames.rts.java.d.b:
-      "Map thumbnail is too large. Size:(W,H) (max:500 pixels)"
-  com.corrodinggames.rts.gameFramework.j:
-      支持 <property name="embedded_png"> 内嵌图集(base64)
-
-用法:
-  python rw_thumbnail.py render <map.tmx> [-o out.png] [--max 500]
-  python rw_thumbnail.py batch  <目录> [--max 500] [--force] [--dry-run]
-  python rw_thumbnail.py patch  <pack.rwmod> [...] [--max 500]
+核心特性:
+  1. 出生点精准解析:
+     - 支持 <objectgroup> 对象层 (commandCenter / factionSelector / spawnPoint / t:N 命名)
+     - 支持 Units 等图块层 (准确支持 0-based 队伍索引映射为 1-based 玩家标号)
+     - 优雅容错: 即使图集图片缺失，仍能无损解析出生点属性并绘制标记
+  2. 出生点高对比度标记绘制 (黑底半透明圆 + 队伍高光描边 + 队伍色数字，支持多达 24 支队伍)
+  3. 支持对 .rwmod 压缩包内单张地图进行精准重绘与热替换更新
+  4. batch 与 patch 命令支持 --force 全量强制重绘，覆盖未带标记的历史缩略图
 """
 
 import argparse
@@ -30,10 +26,9 @@ import zlib
 import xml.etree.ElementTree as ET
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
-# 游戏根目录(本脚本位于 <root>/tools/ 下)
-# 游戏根目录(优先从环境变量或自动判定有效铁锈目录读取)
+# 游戏根目录判定
 candidate_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if os.environ.get("RW_GAME_ROOT") and os.path.exists(os.environ.get("RW_GAME_ROOT")):
     GAME_ROOT = os.environ.get("RW_GAME_ROOT")
@@ -46,19 +41,34 @@ FLIP_H = 0x80000000
 FLIP_V = 0x40000000
 FLIP_D = 0x20000000
 
-# 队伍颜色: (显示色, 地图上指挥中心精灵的颜色)
-# 与 preferences.ini 的 teamColors 一致(来自官方 thumbnail_tool/draw_spawn_points.py)
+# 队伍颜色表: (前景色/显示色, 特征像素参考色)
+# 队伍 1-10 严格匹配官方 preferences.ini teamColors
+# 队伍 11-24 提供高辨识度互补配色
 TEAM_COLORS = {
-    1: ((0, 255, 0), (0, 255, 0)),
-    2: ((255, 0, 0), (255, 0, 0)),
-    3: ((0, 0, 255), (50, 100, 150)),
-    4: ((255, 255, 0), (200, 200, 0)),
-    5: ((0, 255, 255), (230, 170, 100)),
-    6: ((255, 255, 255), (93, 218, 218)),
-    7: ((0, 0, 0), (184, 106, 205)),
-    8: ((255, 0, 255), (106, 108, 205)),
-    9: ((255, 127, 24), (205, 132, 30)),
-    10: ((147, 104, 196), (120, 0, 176)),
+    1:  ((0, 255, 0),     (0, 255, 0)),        # 绿色
+    2:  ((208, 32, 19),   (255, 0, 0)),        # 红色
+    3:  ((4, 99, 243),    (50, 100, 150)),     # 蓝色
+    4:  ((255, 255, 64),  (200, 200, 0)),      # 黄色
+    5:  ((0, 255, 255),   (230, 170, 100)),    # 青色
+    6:  ((208, 248, 247), (93, 218, 218)),     # 浅白/浅青
+    7:  ((180, 180, 180), (184, 106, 205)),    # 灰色
+    8:  ((255, 0, 234),   (106, 108, 205)),    # 粉色
+    9:  ((255, 127, 24),  (205, 132, 30)),     # 橙色
+    10: ((147, 104, 196), (120, 0, 176)),      # 紫色
+    11: ((173, 255, 47),  (173, 255, 47)),     # 黄绿
+    12: ((0, 180, 180),   (0, 180, 180)),      # 深青
+    13: ((138, 43, 226),  (138, 43, 226)),     # 蓝紫
+    14: ((255, 20, 147),  (255, 20, 147)),     # 深粉
+    15: ((205, 133, 63),  (205, 133, 63)),     # 赭石
+    16: ((255, 215, 0),   (255, 215, 0)),      # 金黄
+    17: ((30, 144, 255),  (30, 144, 255)),     # 宝石蓝
+    18: ((238, 130, 238), (238, 130, 238)),    # 罗兰紫
+    19: ((50, 205, 50),   (50, 205, 50)),      # 酸橙绿
+    20: ((220, 20, 60),   (220, 20, 60)),      # 猩红
+    21: ((255, 127, 80),  (255, 127, 80)),     # 珊瑚红
+    22: ((106, 90, 205),  (106, 90, 205)),     # 瓦蓝
+    23: ((255, 140, 0),   (255, 140, 0)),      # 深橙
+    24: ((224, 224, 224), (224, 224, 224)),    # 银白
 }
 
 _FONT_CANDIDATES = [
@@ -66,16 +76,15 @@ _FONT_CANDIDATES = [
     os.path.join(GAME_ROOT, "font", "Roboto-Bold.ttf"),
     r"C:\Windows\Fonts\arialbd.ttf",
     r"C:\Windows\Fonts\segoeuib.ttf",
+    r"C:\Windows\Fonts\msyhbd.ttc",
+    r"C:\Windows\Fonts\simhei.ttf",
 ]
 
-# 渲染优先级:数字越小越先画(在下面)
 LAYER_ORDER = {"ground": 0, "ground2": 1, "items": 2, "units": 3, "objects": 4}
-
-# 游戏根目录(本脚本位于 <root>/tools/ 下)
 
 
 def _search_roots():
-    """外部图集的候选搜索根,按由近及远排列。"""
+    """外部图集的候选搜索根路径。"""
     roots = []
     for base in (GAME_ROOT, os.path.join(GAME_ROOT, "assets"), os.path.join(GAME_ROOT, "mods")):
         for sub in ("", "tilesets", "tilesets/bitmaps", "tilesets/ridges", "tilesets/terrain",
@@ -90,8 +99,7 @@ SEARCH_ROOTS = _search_roots()
 
 
 def _apply_transparency(img, trans):
-    """Tiled 的 trans 属性指定一个应视为透明的颜色键。"""
-    # 调色板 PNG:先按内建 transparency 转 RGBA
+    """Tiled 的 trans 属性指定一个视为透明的颜色键。"""
     if img.mode == "P":
         img = img.convert("RGBA") if "transparency" not in img.info else Image.open(
             img.filename or img
@@ -111,7 +119,7 @@ def _apply_transparency(img, trans):
 
 
 def _find_file(rel, tmx_dir, zip_reader=None):
-    """按多种规则解析外部文件(.tsx / .png)路径,返回 bytes 或 None。"""
+    """按多种规则解析外部文件(.tsx / .png)路径,返回 (bytes, base_dir) 或 None。"""
     rel = rel.replace("\\", "/")
     bases = [tmx_dir]
     d = tmx_dir
@@ -135,7 +143,6 @@ def _find_file(rel, tmx_dir, zip_reader=None):
             for n in names:
                 if n == rr or n.endswith("/" + rr):
                     return zip_reader.read(n), os.path.dirname(n).replace("\\", "/")
-        # zip 内没有 -> 回退到游戏安装目录(模组常引用内置 assets/tilesets)
         for c in cands:
             if os.path.isfile(c):
                 with open(c, "rb") as fh:
@@ -150,7 +157,7 @@ def _find_file(rel, tmx_dir, zip_reader=None):
 
 
 def _find_external_image(src, tmx_dir, zip_reader=None):
-    """按多种规则解析外部图集路径。"""
+    """按多种规则解析外部图集位图。"""
     src = src.replace("\\", "/")
     candidates = []
     bases = [tmx_dir]
@@ -173,25 +180,35 @@ def _find_external_image(src, tmx_dir, zip_reader=None):
             rel = c.replace("\\", "/").lstrip("./")
             for n in names:
                 if n == rel or n.endswith("/" + rel):
-                    return Image.open(io.BytesIO(zip_reader.read(n))).convert("RGBA")
+                    try:
+                        return Image.open(io.BytesIO(zip_reader.read(n))).convert("RGBA")
+                    except Exception:
+                        pass
         base = os.path.basename(src)
         for n in names:
             if os.path.basename(n).lower() == base.lower():
-                return Image.open(io.BytesIO(zip_reader.read(n))).convert("RGBA")
-        # zip 内没有 -> 回退到游戏安装目录
+                try:
+                    return Image.open(io.BytesIO(zip_reader.read(n))).convert("RGBA")
+                except Exception:
+                    pass
         for c in candidates:
             if os.path.isfile(c):
-                return Image.open(c).convert("RGBA")
+                try:
+                    return Image.open(c).convert("RGBA")
+                except Exception:
+                    pass
         return None
 
     for c in candidates:
         if os.path.isfile(c):
-            return Image.open(c).convert("RGBA")
+            try:
+                return Image.open(c).convert("RGBA")
+            except Exception:
+                pass
     return None
 
 
 def _prop_text(el):
-    """property 可能是 value 属性,也可能是元素正文(RW 导出用后者装 base64)。"""
     v = el.get("value")
     if v is not None:
         return v
@@ -206,7 +223,6 @@ def _decode_layer(data_el, w, h):
         raw = zlib.decompress(raw)
     elif comp == "gzip":
         import gzip
-
         raw = gzip.decompress(raw)
     elif comp:
         raise ValueError("unsupported layer compression: %r" % comp)
@@ -232,7 +248,6 @@ class Tileset(object):
 
 
 def _open_image_from_spec(ts, tmx_dir, zip_reader=None):
-    """从 embedded_png 或外部 image source 载入 tileset 位图。"""
     props = {}
     for pr in ts.findall("./properties/property"):
         props[pr.get("name")] = _prop_text(pr)
@@ -244,15 +259,14 @@ def _open_image_from_spec(ts, tmx_dir, zip_reader=None):
             ie0 = ts.find("image")
             trans = ie0.get("trans") if ie0 is not None else None
             return _apply_transparency(img, trans)
-        except Exception as exc:
-            print("    ! embedded_png 解码失败(%s): %s" % (ts.get("name"), exc))
+        except Exception:
+            pass
 
     ie = ts.find("image")
     if ie is None or not ie.get("source"):
         return None
     img = _find_external_image(ie.get("source"), tmx_dir, zip_reader)
     if img is None:
-        print("    ! 缺少外部图集: %s" % ie.get("source"))
         return None
     return _apply_transparency(img, ie.get("trans"))
 
@@ -266,39 +280,38 @@ def _load_tilesets(root, tmx_dir, zip_reader=None):
         src = ts.get("source")
         img_base = tmx_dir
         if src:
-            # <tileset firstgid="N" source="terrain/Long Grass.tsx" /> 外部引用
             got = _find_file(src, tmx_dir, zip_reader)
-            if got is None:
-                print("    ! 缺少图集定义文件: %s" % src)
-                continue
-            tsx, img_base = got
-            try:
-                ts = ET.fromstring(tsx)
-            except Exception as exc:
-                print("    ! 图集定义解析失败(%s): %s" % (src, exc))
-                continue
-            ts.set("firstgid", str(firstgid))
-            if not ts.get("name"):
-                ts.set("name", src)
+            if got is not None:
+                tsx, img_base = got
+                try:
+                    ts = ET.fromstring(tsx)
+                    ts.set("firstgid", str(firstgid))
+                    if not ts.get("name"):
+                        ts.set("name", src)
+                except Exception:
+                    pass
+
         img = _open_image_from_spec(ts, img_base, zip_reader)
-        if img is None:
-            continue
         tw = int(ts.get("tilewidth") or map_tw)
         th = int(ts.get("tileheight") or map_th)
-        if tw <= 0 or th <= 0:
-            continue
+        tilecount = int(ts.get("tilecount") or 120)
         cols = ts.get("columns")
-        cols = int(cols) if cols else max(1, img.width // tw)
-        rows = max(1, img.height // th)
-        tiles = []
-        for local in range(cols * rows):
-            x = (local % cols) * tw
-            y = (local // cols) * th
-            if x + tw > img.width or y + th > img.height:
-                tiles.append(None)
-                continue
-            tiles.append(img.crop((x, y, x + tw, y + th)))
-        # 读取 <tile> 上的 team / unit 属性(用于定位各队指挥中心)
+
+        if img is not None:
+            cols = int(cols) if cols else max(1, img.width // tw)
+            rows = max(1, img.height // th)
+            tiles = []
+            for local in range(cols * rows):
+                x = (local % cols) * tw
+                y = (local // cols) * th
+                if x + tw > img.width or y + th > img.height:
+                    tiles.append(None)
+                else:
+                    tiles.append(img.crop((x, y, x + tw, y + th)))
+        else:
+            cols = int(cols) if cols else 10
+            tiles = [None] * max(tilecount, 200)
+
         tile_team = [-1] * len(tiles)
         tile_cc = [False] * len(tiles)
         for tile in ts.findall("tile"):
@@ -306,11 +319,17 @@ def _load_tilesets(root, tmx_dir, zip_reader=None):
                 tid = int(tile.get("id"))
             except (TypeError, ValueError):
                 continue
-            if tid < 0 or tid >= len(tiles):
+            if tid < 0:
                 continue
+            if tid >= len(tiles):
+                # 动态扩容
+                diff = tid - len(tiles) + 1
+                tiles.extend([None] * diff)
+                tile_team.extend([-1] * diff)
+                tile_cc.extend([False] * diff)
             for pr in tile.findall("./properties/property"):
                 pn = pr.get("name")
-                pv = pr.get("value") or ""
+                pv = _prop_text(pr)
                 if pn == "team":
                     try:
                         tile_team[tid] = int(pv)
@@ -318,20 +337,20 @@ def _load_tilesets(root, tmx_dir, zip_reader=None):
                         pass
                 elif pn == "unit" and pv.lower() == "commandcenter":
                     tile_cc[tid] = True
+
         out.append(
-            Tileset(int(ts.get("firstgid") or 1), ts.get("name") or "", tw, th, cols, tiles,
-                    tile_team, tile_cc)
+            Tileset(firstgid, ts.get("name") or "", tw, th, cols, tiles, tile_team, tile_cc)
         )
     out.sort(key=lambda t: t.firstgid)
     return out
 
 
 def _resolve_gid(tilesets, gid):
-    """gid -> (tileset, local_id);用 Tiled 语义:取 firstgid 最大且 <= gid 的图集。"""
     if gid == 0:
         return None
-    flags = gid & (FLIP_H | FLIP_V | FLIP_D)
-    base = gid & ~(FLIP_H | FLIP_V | FLIP_D)
+    gid_int = int(gid)
+    flags = gid_int & (FLIP_H | FLIP_V | FLIP_D)
+    base = gid_int & ~(FLIP_H | FLIP_V | FLIP_D)
     cand = None
     for ts in tilesets:
         if ts.firstgid <= base:
@@ -341,12 +360,14 @@ def _resolve_gid(tilesets, gid):
     if cand is None:
         return None
     local = base - cand.firstgid
-    if local < 0 or local >= len(cand.tiles) or cand.tiles[local] is None:
+    if local < 0 or local >= len(cand.tiles):
         return None
     return cand, local, flags
 
 
 def _apply_flip(img, flags):
+    if img is None:
+        return None
     if flags & FLIP_H:
         img = img.transpose(Image.FLIP_LEFT_RIGHT)
     if flags & FLIP_V:
@@ -356,15 +377,118 @@ def _apply_flip(img, flags):
     return img
 
 
+def detect_spawn_positions(root, tilesets, full_w, full_h, thumb_w, thumb_h, player_count=10):
+    """
+    全方位解析地图出生点坐标。
+    阶段 1: 解析 <objectgroup> 明确声明的对象 (CommandCenter / FactionSelector / Spawns)
+    阶段 2: 解析 Units 等图块层中的指挥中心图块 (0-based team 正确映射到 1-based 玩家)
+    返回 {player_id: (tx, ty)}，坐标为缩略图中的真实像素坐标。
+    """
+    positions = {}
+    sx = thumb_w / float(full_w)
+    sy = thumb_h / float(full_h)
+
+    # 阶段 1: 扫描所有 <objectgroup>
+    for og in root.findall("objectgroup"):
+        for obj in og.findall("object"):
+            props = {}
+            for p in obj.findall("./properties/property"):
+                props[p.get("name", "")] = _prop_text(p)
+            oname = (obj.get("name") or "").strip()
+            otype = (obj.get("type") or "").strip()
+
+            is_cc = (
+                props.get("unit", "").lower() == "commandcenter"
+                or "commandcenter" in oname.lower()
+                or "commandcenter" in otype.lower()
+                or oname.lower().startswith("spawn")
+                or oname.lower().startswith("factionselector")
+            )
+
+            team_id = None
+            if "team" in props:
+                try:
+                    t = int(props["team"])
+                    if t >= 0:
+                        team_id = t + 1
+                except ValueError:
+                    pass
+
+            if team_id is None:
+                m = re.search(r"\(t:(-?[0-9]+)\)", oname, re.IGNORECASE) or re.search(
+                    r"\bt:([0-9]+)\b", oname, re.IGNORECASE
+                )
+                if m:
+                    t = int(m.group(1))
+                    if t >= 0:
+                        team_id = t + 1
+
+            if team_id is None:
+                m = re.search(r"(?:spawn|player|p)[_\s\-]?([0-9]+)\b", oname, re.IGNORECASE)
+                if m:
+                    t = int(m.group(1))
+                    if 1 <= t <= 24:
+                        team_id = t
+
+            if is_cc and team_id is not None:
+                try:
+                    ox = float(obj.get("x", 0))
+                    oy = float(obj.get("y", 0))
+                    ow = float(obj.get("width", 0))
+                    oh = float(obj.get("height", 0))
+                    cx = ox + ow / 2.0
+                    cy = oy + oh / 2.0
+                    positions[team_id] = (cx * sx, cy * sy)
+                except Exception:
+                    pass
+
+    # 阶段 2: 扫描 Units / 图块层
+    map_w = int(root.get("width") or 0)
+    map_h = int(root.get("height") or 0)
+    map_tw = int(root.get("tilewidth") or 32)
+    map_th = int(root.get("tileheight") or 32)
+
+    tile_cc_cells = {}
+    for lay in root.findall("layer"):
+        lname = (lay.get("name") or "").strip().lower()
+        if "unit" in lname or lname in ("objects", "triggers"):
+            data_el = lay.find("data")
+            if data_el is None:
+                continue
+            try:
+                gids = _decode_layer(data_el, map_w, map_h)
+            except Exception:
+                continue
+            rows = gids.tolist()
+            for y in range(map_h):
+                row = rows[y]
+                for x in range(map_w):
+                    gid = row[x]
+                    if gid == 0:
+                        continue
+                    res = _resolve_gid(tilesets, gid)
+                    if res is None:
+                        continue
+                    ts, local, flags = res
+                    if ts.tile_cc[local] and ts.tile_team[local] >= 0:
+                        tid = ts.tile_team[local] + 1
+                        tile_cc_cells.setdefault(tid, []).append((x, y))
+
+    # 将图块坐标转换为缩略图坐标
+    for tid, cells in tile_cc_cells.items():
+        if tid not in positions:
+            avg_x = sum(c[0] for c in cells) / float(len(cells)) + 0.5
+            avg_y = sum(c[1] for c in cells) / float(len(cells)) + 0.5
+            wx = avg_x * map_tw
+            wy = avg_y * map_th
+            positions[tid] = (wx * sx, wy * sy)
+
+    return positions
+
+
 def render_tmx_bytes(tmx_bytes, tmx_name="<memory>", zip_reader=None, max_dim=500,
-                     scale_cap=8000, verbose=True, exclude_layers=(), detect_units=False,
-                     player_count=0):
-    """
-    渲染 TMX 字节流为缩略图 PIL 图像。
-    exclude_layers: 需要跳过的图层名(小写)
-    detect_units:   True 时在缩放前检测各队出生点,并换算到最终图像坐标
-    返回 (image, positions)
-    """
+                     scale_cap=8000, exclude_layers=()):
+    """渲染 TMX 地图画面。返回 (PIL.Image, positions, full_w, full_h)。"""
     root = ET.fromstring(tmx_bytes)
     w = int(root.get("width") or 0)
     h = int(root.get("height") or 0)
@@ -385,20 +509,18 @@ def render_tmx_bytes(tmx_bytes, tmx_name="<memory>", zip_reader=None, max_dim=50
         fill_gid = 0
 
     skip = set(x.lower() for x in exclude_layers)
-    # 收集图层,按 RW 的视觉顺序排
     layers = []
     for lay in root.findall("layer"):
         name = (lay.get("name") or "").strip()
         low = name.lower()
         if low == "set":
-            continue  # automapping 源图层,游戏本身忽略
+            continue
         if low in skip:
             continue
         prio = LAYER_ORDER.get(low, 5)
         layers.append((prio, len(layers), name, lay))
     layers.sort(key=lambda x: (x[0], x[1]))
 
-    # 中间画布尺寸上限,避免超大地图吃内存
     full_w, full_h = w * map_tw, h * map_th
     scale = 1.0
     if max(full_w, full_h) > scale_cap:
@@ -415,33 +537,33 @@ def render_tmx_bytes(tmx_bytes, tmx_name="<memory>", zip_reader=None, max_dim=50
     flip_cache = {}
 
     def tile_image(ts, local, flags):
+        tile = ts.tiles[local]
+        if tile is None:
+            return None
         if not flags:
-            return ts.tiles[local]
+            return tile
         key = (id(ts), local, flags)
         img = flip_cache.get(key)
         if img is None:
-            img = _apply_flip(ts.tiles[local], flags)
-            if scale != 1.0:
+            img = _apply_flip(tile, flags)
+            if scale != 1.0 and img is not None:
                 img = img.resize((tw, th), Image.LANCZOS)
             flip_cache[key] = img
         return img
 
-    # 预先把所有用到的 tileset 预缩放(仅在 scale != 1 时)
     if scale != 1.0:
         for ts in tilesets:
             ts.tiles = [
                 t.resize((tw, th), Image.LANCZOS) if t is not None else None for t in ts.tiles
             ]
 
-    cc_cells = {}
     for prio, _seq, name, lay in layers:
         data_el = lay.find("data")
         if data_el is None:
             continue
         try:
             gids = _decode_layer(data_el, w, h)
-        except Exception as exc:
-            print("    ! 图层 %r 解码失败: %s" % (name, exc))
+        except Exception:
             continue
         rows = gids.tolist()
         for y in range(h):
@@ -457,33 +579,32 @@ def render_tmx_bytes(tmx_bytes, tmx_name="<memory>", zip_reader=None, max_dim=50
                 if res is None:
                     continue
                 ts, local, flags = res
-                if detect_units and ts.tile_cc[local] and ts.tile_team[local] > 0:
-                    cc_cells.setdefault(ts.tile_team[local], []).append((x, y))
                 img = ts.tiles[local]
+                if img is None:
+                    continue
                 if flags:
                     img = tile_image(ts, local, flags)
+                    if img is None:
+                        continue
                 if ts.tw != tw or ts.th != th:
                     img = img.resize((tw, th), Image.LANCZOS)
                 canvas.paste(img, (x * tw, y * th), img)
 
-    # 出生点检测必须在缩放前做(缩放会破坏精确颜色)
-    positions = {}
-    if detect_units and player_count > 0:
-        positions = _detect_team_positions(canvas, player_count, cc_cells, tw, th)
-
-    # 缩放到 max_dim 以内
+    # 缩放到目标缩略图尺寸
     cw, ch = canvas.size
+    final_w, final_h = cw, ch
     if max(cw, ch) > max_dim:
         r = max_dim / float(max(cw, ch))
-        canvas = canvas.resize((max(1, int(round(cw * r))), max(1, int(round(ch * r)))),
-                               Image.LANCZOS)
-        # 坐标换算到最终图像
-        positions = dict((tid, (px * r, py * r)) for tid, (px, py) in positions.items())
+        final_w = max(1, int(round(cw * r)))
+        final_h = max(1, int(round(ch * r)))
+        canvas = canvas.resize((final_w, final_h), Image.LANCZOS)
 
-    # 展平到不透明背景(RW 用 PNGImageData 加载,RGB 最稳)
     bg = Image.new("RGB", canvas.size, (0, 0, 0))
     bg.paste(canvas, (0, 0), canvas)
-    return bg, positions
+
+    # 精确获取出生点
+    positions = detect_spawn_positions(root, tilesets, full_w, full_h, final_w, final_h)
+    return bg, positions, full_w, full_h
 
 
 def _read_tmx_bytes(path):
@@ -491,57 +612,7 @@ def _read_tmx_bytes(path):
         return fh.read()
 
 
-def _detect_team_positions(unit_img, player_count, cc_cells=None, tw=1, th=1):
-    """
-    在"只有 Units 图层"的渲染图上,按队伍颜色找出各队指挥中心位置。
-    算法复刻官方 thumbnail_tool/draw_spawn_points.py(用 numpy 向量化)。
-    cc_cells: 由图集属性(unit=commandCenter / team=N)定位到的候选格,
-              用于把颜色搜索限制在指挥中心附近,避免误匹配。
-    返回 {team_id: (x, y)},坐标为 unit_img 的像素坐标。
-    """
-    arr = np.array(unit_img)
-    if arr.ndim != 3 or arr.shape[2] != 4:
-        return {}
-    mask = arr[:, :, 3] != 0
-    if not mask.any():
-        return {}
-    ys, xs = np.nonzero(mask)
-    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
-    sub = arr[y0:y1, x0:x1]
-    submask = sub[:, :, 3] != 0
-    rgb = sub[:, :, :3].astype(np.int16)
-    out = {}
-    for tid in range(1, min(player_count, 10) + 1):
-        _disp, target = TEAM_COLORS[tid]
-        # 限制搜索区域到该队指挥中心附近
-        region = None
-        if cc_cells and tid in cc_cells:
-            H, W = sub.shape[:2]
-            region = np.zeros((H, W), dtype=bool)
-            for (cx, cy) in cc_cells[tid]:
-                rx0 = max(0, int(cx * tw - tw) - x0)
-                rx1 = min(W, int(cx * tw + tw * 2) - x0)
-                ry0 = max(0, int(cy * th - th) - y0)
-                ry1 = min(H, int(cy * th + th * 2) - y0)
-                if rx1 > rx0 and ry1 > ry0:
-                    region[ry0:ry1, rx0:rx1] = True
-            if not region.any():
-                region = None
-        diff = np.abs(rgb - np.array(target, dtype=np.int16)).sum(axis=2)
-        diff = np.where(submask, diff, 1 << 30)
-        if region is not None:
-            diff = np.where(region, diff, 1 << 30)
-        best = int(diff.min())
-        if best >= 500:  # 与官方脚本一致的接受阈值
-            continue
-        bys, bxs = np.nonzero(diff == best)
-        out[tid] = (float(bxs.mean()) + x0, float(bys.mean()) + y0)
-    return out
-
-
 def _load_font(size):
-    from PIL import ImageFont
-
     for p in _FONT_CANDIDATES:
         if os.path.isfile(p):
             try:
@@ -551,30 +622,48 @@ def _load_font(size):
     return ImageFont.load_default()
 
 
-def _draw_team_markers(map_img, positions, unit_size):
-    """在缩略图上画出生点编号(黑色半透明圆 + 队伍色数字)。"""
+def _draw_team_markers(map_img, positions):
+    """
+    在缩略图上画出生点编号:
+    - 黑色半透明圆底
+    - 细腻白色/队伍色光晕描边
+    - 队伍色高对比度加粗数字
+    """
     if not positions:
         return map_img
-    from PIL import ImageDraw
 
     W, H = map_img.size
-    sx = W / float(unit_size[0])
-    sy = H / float(unit_size[1])
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
-    font = _load_font(18)
-    eSize = 11
-    for tid, (px, py) in positions.items():
+
+    # 动态根据图像大小计算标号圈半径 (保持视觉适中)
+    eSize = max(9, min(14, int(round(min(W, H) * 0.026))))
+    fontSize = max(10, int(round(eSize * 1.35)))
+    font = _load_font(fontSize)
+
+    for tid in sorted(positions.keys()):
+        tx, ty = positions[tid]
         disp = TEAM_COLORS.get(tid, ((255, 255, 255), (255, 255, 255)))[0]
-        tx, ty = px * sx, py * sy
-        draw.ellipse((tx - eSize, ty - eSize, tx + eSize, ty + eSize), fill=(0, 0, 0, 100))
+
+        # 1. 黑色半透明底圆
+        draw.ellipse(
+            (tx - eSize, ty - eSize, tx + eSize, ty + eSize),
+            fill=(0, 0, 0, 160),
+            outline=(255, 255, 255, 140),
+            width=1,
+        )
+
+        # 2. 居中绘制数字
         txt = str(tid)
         try:
             l, t, r, b = draw.textbbox((0, 0), txt, font=font)
             tw, th = r - l, b - t
         except Exception:
-            tw = th = 10
-        draw.text((tx - tw / 2.0, ty - th / 2.0 - 3), txt, fill=disp + (255,), font=font)
+            tw, th = 8, 10
+        # 阴影与正文
+        draw.text((tx - tw / 2.0 + 1, ty - th / 2.0), txt, fill=(0, 0, 0, 200), font=font)
+        draw.text((tx - tw / 2.0, ty - th / 2.0 - 1), txt, fill=disp + (255,), font=font)
+
     base = map_img.convert("RGBA")
     base.paste(layer, (0, 0), layer)
     return base.convert("RGB")
@@ -584,67 +673,99 @@ def _player_count_from_name(path):
     """支持官方 [pN] 规范以及社区常见的 (10p)、（12P混战）、(p4)、10人 等命名。"""
     name = os.path.basename(path)
     # 1. 官方规范 [p2] 或 [2p]
-    m = re.search(r'\[(?:.*;)?p?([0-9]+)p?\]', name, re.IGNORECASE)
+    m = re.search(r"\[(?:.*;)?p?([0-9]+)p?\]", name, re.IGNORECASE)
     if m:
         try:
             val = int(m.group(1))
-            if 1 <= val <= 24: return val
-        except: pass
+            if 1 <= val <= 24:
+                return val
+        except Exception:
+            pass
     # 2. 括号内的 (10p), （12P混战）, (p4)
-    m = re.search(r'[\(（](?:p)?([0-9]+)\s*p?[^\)）]*[\)）]', name, re.IGNORECASE)
+    m = re.search(r"[\(（](?:p)?([0-9]+)\s*p?[^\)）]*[\)）]", name, re.IGNORECASE)
     if m:
         try:
             val = int(m.group(1))
-            if 1 <= val <= 24: return val
-        except: pass
+            if 1 <= val <= 24:
+                return val
+        except Exception:
+            pass
     # 3. 匹配人数字符，如 10人
-    m = re.search(r'([0-9]+)\s*人', name)
+    m = re.search(r"([0-9]+)\s*人", name)
     if m:
         try:
             val = int(m.group(1))
-            if 1 <= val <= 24: return val
-        except: pass
+            if 1 <= val <= 24:
+                return val
+        except Exception:
+            pass
     # 4. 匹配结尾或带下划线的数字+p，如 23p混战, _2p_
-    m = re.search(r'(?:[_\s\-])([0-9]{1,2})\s*p\b', name, re.IGNORECASE)
+    m = re.search(r"(?:[_\s\-])([0-9]{1,2})\s*p\b", name, re.IGNORECASE)
     if m:
         try:
             val = int(m.group(1))
-            if 1 <= val <= 24: return val
-        except: pass
-    m = re.search(r'([0-9]{1,2})\s*p(?:混战|图)?', name, re.IGNORECASE)
+            if 1 <= val <= 24:
+                return val
+        except Exception:
+            pass
+    m = re.search(r"([0-9]{1,2})\s*p(?:混战|图)?", name, re.IGNORECASE)
     if m:
         try:
             val = int(m.group(1))
-            if 1 <= val <= 24: return val
-        except: pass
-    # 默认探查前10支队伍的指挥中心
+            if 1 <= val <= 24:
+                return val
+        except Exception:
+            pass
     return 10
 
 
 def render_map(tmx_bytes, tmx_name, zip_reader=None, max_dim=500):
-    """完整渲染:地图画面 + 出生点编号。返回 PIL 图像。"""
-    player_count = _player_count_from_name(tmx_name)
-    map_img, _ = render_tmx_bytes(tmx_bytes, tmx_name, zip_reader, max_dim,
-                                  exclude_layers=())
-    if player_count > 0:
-        _u, positions = render_tmx_bytes(
-            tmx_bytes, tmx_name, zip_reader, max_dim,
-            exclude_layers=("ground", "ground2", "items", "set", "objects"),
-            detect_units=True, player_count=player_count)
-        if positions:
-            map_img = _draw_team_markers(map_img, positions, map_img.size)
+    """完整渲染: 地图底图 + 精准出生点标号。返回 PIL 图像。"""
+    map_img, positions, _w, _h = render_tmx_bytes(
+        tmx_bytes, tmx_name, zip_reader, max_dim, exclude_layers=()
+    )
+    if positions:
+        map_img = _draw_team_markers(map_img, positions)
     return map_img
 
 
 def cmd_render(args):
-    data = _read_tmx_bytes(args.tmx)
-    img = render_map(data, os.path.abspath(args.tmx), None, args.max)
+    target = args.tmx
     out = args.out
+
+    # 支持 pack.rwmod:inner_map.tmx 语法
+    if ".rwmod:" in target:
+        parts = target.split(".rwmod:", 1)
+        pack_path = parts[0] + ".rwmod"
+        inner_tmx = parts[1].replace("\\", "/")
+        with zipfile.ZipFile(pack_path, "r") as z:
+            data = z.read(inner_tmx)
+            img = render_map(data, inner_tmx, z, args.max)
+
+        if not out:
+            base = inner_tmx[:-4] if inner_tmx.lower().endswith(".tmx") else inner_tmx
+            out = base + "_map.png"
+
+        # 如果指定了 --patch-zip，直接更新进压缩包
+        if args.patch_zip:
+            want_name = (inner_tmx[:-4] if inner_tmx.lower().endswith(".tmx") else inner_tmx) + "_map.png"
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            _update_zip_entries(pack_path, {want_name: buf.getvalue()})
+            print("  已同步更新至压缩包: %s -> %s" % (os.path.basename(pack_path), want_name))
+
+        img.save(out)
+        print("  -> %s  %dx%d  %d bytes" % (out, img.width, img.height, os.path.getsize(out)))
+        return 0
+
+    data = _read_tmx_bytes(target)
+    img = render_map(data, os.path.abspath(target), None, args.max)
     if not out:
-        base = args.tmx[:-4] if args.tmx.lower().endswith(".tmx") else args.tmx
+        base = target[:-4] if target.lower().endswith(".tmx") else target
         out = base + "_map.png"
     img.save(out)
     print("  -> %s  %dx%d  %d bytes" % (out, img.width, img.height, os.path.getsize(out)))
+    return 0
 
 
 def cmd_batch(args):
@@ -655,7 +776,6 @@ def cmd_batch(args):
     else:
         files = []
         for dirpath, _dirs, names in os.walk(root):
-            # rules/ 目录里是地形自动衔接规则集(由 rules.txt 声明),不是可玩地图
             if os.path.basename(dirpath).lower() == "rules":
                 continue
             for n in names:
@@ -682,13 +802,39 @@ def cmd_batch(args):
         except Exception as exc:
             print("  ! 失败 %s: %s" % (os.path.basename(f), exc))
             failed += 1
-    print("\n完成: 新建 %d, 跳过 %d, 失败 %d" % (made, skipped, failed))
+    print("\n完成: 新建/覆盖 %d, 跳过 %d, 失败 %d" % (made, skipped, failed))
     return 1 if failed else 0
 
 
+def _update_zip_entries(pack_path, entries_dict):
+    """安全热更新 zip/rwmod 内部文件。"""
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".rwmod", dir=os.path.dirname(os.path.abspath(pack_path)))
+    os.close(tmp_fd)
+    try:
+        with zipfile.ZipFile(pack_path) as zin, zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
+            added_lower = set(k.lower() for k in entries_dict.keys())
+            for item in zin.infolist():
+                if item.filename.lower() in added_lower:
+                    continue  # 跳过旧版本，由新 entries 写入
+                data = zin.read(item.filename)
+                zi = zipfile.ZipInfo(item.filename, date_time=item.date_time)
+                zi.compress_type = item.compress_type
+                zi.external_attr = item.external_attr
+                zout.writestr(zi, data)
+            for name, data in entries_dict.items():
+                zout.writestr(name, data)
+        shutil.move(tmp_path, pack_path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
 def cmd_patch(args):
-    """把缺失的 _map.png 补进 .rwmod(zip)包内部。"""
+    """为 .rwmod 包内部地图生成或强制重绘带出生点标记的 _map.png。"""
     for pack in args.packs:
+        if not os.path.exists(pack):
+            print("! 文件不存在: %s" % pack)
+            continue
         print("== %s" % os.path.basename(pack))
         with zipfile.ZipFile(pack) as z:
             names = z.namelist()
@@ -697,57 +843,34 @@ def cmd_patch(args):
             todo = []
             for n in tmxs:
                 want = n[:-4] + "_map.png"
-                if want.lower() not in have:
+                if args.force or (want.lower() not in have):
                     todo.append((n, want))
             if not todo:
-                print("  所有地图都已有缩略图")
+                print("  所有地图都已有缩略图且未指定 --force")
                 continue
             if args.dry_run:
                 for n, want in todo:
-                    print("  * 将注入: %s" % want)
+                    print("  * 将生成并更新: %s" % want)
                 continue
             add = {}
-            with zipfile.ZipFile(pack) as z:
-                for n, want in todo:
-                    try:
-                        img = render_map(z.read(n), n, z, args.max)
-                        buf = io.BytesIO()
-                        img.save(buf, format="PNG")
-                        add[want] = buf.getvalue()
-                        print("  + %s  %dx%d  %d bytes"
-                              % (want, img.width, img.height, len(add[want])))
-                    except Exception as exc:
-                        print("  ! 渲染失败 %s: %s" % (n, exc))
+            for n, want in todo:
+                try:
+                    img = render_map(z.read(n), n, z, args.max)
+                    buf = io.BytesIO()
+                    img.save(buf, format="PNG")
+                    add[want] = buf.getvalue()
+                    print("  + %s  %dx%d  %d bytes" % (want, img.width, img.height, len(add[want])))
+                except Exception as exc:
+                    print("  ! 渲染失败 %s: %s" % (n, exc))
             if not add:
                 continue
-            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".rwmod",
-                                               dir=os.path.dirname(os.path.abspath(pack)))
-            os.close(tmp_fd)
-            try:
-                with zipfile.ZipFile(pack) as zin, \
-                        zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
-                    for item in zin.infolist():
-                        data = zin.read(item.filename)
-                        zi = zipfile.ZipInfo(item.filename, date_time=item.date_time)
-                        zi.compress_type = item.compress_type
-                        zi.external_attr = item.external_attr
-                        zout.writestr(zi, data)
-                    for name, data in add.items():
-                        zout.writestr(name, data)
-                shutil.move(tmp_path, pack)
-                print("  已写回 %s(+%d 个缩略图)" % (os.path.basename(pack), len(add)))
-            finally:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
+            _update_zip_entries(pack, add)
+            print("  已写回 %s (更新 %d 个缩略图)" % (os.path.basename(pack), len(add)))
     return 0
 
 
 def cmd_fixnames(args):
-    """
-    修复缩略图文件名与地图名不严格匹配的情况。
-    游戏的 zip 查找是 ZipFile.getEntry() + String.equals(),严格区分大小写,
-    所以 <地图>_map.PNG / 前缀写错的 缩略图在游戏里是找不到的。
-    """
+    """修复缩略图文件名大小写及缺失。"""
     for pack in args.packs:
         print("== %s" % os.path.basename(pack))
         with zipfile.ZipFile(pack) as z:
@@ -755,8 +878,8 @@ def cmd_fixnames(args):
             lowmap = {}
             for n in names:
                 lowmap.setdefault(n.lower(), n)
-            copy_jobs = []   # (源条目, 目标条目)
-            render_jobs = [] # (tmx条目, 目标条目)
+            copy_jobs = []
+            render_jobs = []
             for n in sorted(names):
                 if not n.lower().endswith(".tmx"):
                     continue
@@ -794,48 +917,33 @@ def cmd_fixnames(args):
                     print("  ! 渲染失败 %s: %s" % (src, exc))
         if not add:
             continue
-        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".rwmod",
-                                           dir=os.path.dirname(os.path.abspath(pack)))
-        os.close(tmp_fd)
-        try:
-            with zipfile.ZipFile(pack) as zin, \
-                    zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
-                for item in zin.infolist():
-                    data = zin.read(item.filename)
-                    zi = zipfile.ZipInfo(item.filename, date_time=item.date_time)
-                    zi.compress_type = item.compress_type
-                    zi.external_attr = item.external_attr
-                    zout.writestr(zi, data)
-                for name, data in add.items():
-                    zout.writestr(name, data)
-            shutil.move(tmp_path, pack)
-            print("  已写回 (+%d)" % len(add))
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+        _update_zip_entries(pack, add)
+        print("  已写回 (+%d)" % len(add))
     return 0
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Rusted Warfare 地图缩略图生成器")
+    ap = argparse.ArgumentParser(description="Rusted Warfare 地图高清出生点缩略图生成器")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    r = sub.add_parser("render", help="渲染单个 .tmx")
+    r = sub.add_parser("render", help="渲染单个 .tmx (支持 pack.rwmod:inner.tmx)")
     r.add_argument("tmx")
     r.add_argument("-o", "--out", default=None)
     r.add_argument("--max", type=int, default=500)
+    r.add_argument("--patch-zip", action="store_true", help="如果是 zip 内部地图，直接写回 zip")
     r.set_defaults(func=cmd_render)
 
     b = sub.add_parser("batch", help="批量处理目录")
     b.add_argument("dir")
     b.add_argument("--max", type=int, default=500)
-    b.add_argument("--force", action="store_true")
+    b.add_argument("--force", action="store_true", help="强制全量重绘覆盖已有缩略图")
     b.add_argument("--dry-run", action="store_true")
     b.set_defaults(func=cmd_batch)
 
-    p = sub.add_parser("patch", help="把缩略图注入 .rwmod 包")
+    p = sub.add_parser("patch", help="把缩略图注入/重绘至 .rwmod 包内部")
     p.add_argument("packs", nargs="+")
     p.add_argument("--max", type=int, default=500)
+    p.add_argument("--force", action="store_true", help="强制全量重绘替换包内已有缩略图")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_patch)
 

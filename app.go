@@ -21,6 +21,8 @@ type App struct {
 	modService    *services.ModService
 	mapService    *services.MapService
 	launchService *services.LaunchService
+	lanService    *services.LanService
+	updateService *services.UpdateService
 }
 
 // NewApp 创建 App 实例并注入各项服务
@@ -30,6 +32,8 @@ func NewApp() *App {
 	modSvc := services.NewModService(prefSvc)
 	mapSvc := services.NewMapService(prefSvc)
 	launchSvc := services.NewLaunchService()
+	lanSvc := services.NewLanService(gameSvc, prefSvc, modSvc, mapSvc)
+	updateSvc := services.NewUpdateService(gameSvc, lanSvc)
 
 	return &App{
 		gameService:   gameSvc,
@@ -37,14 +41,22 @@ func NewApp() *App {
 		modService:    modSvc,
 		mapService:    mapSvc,
 		launchService: launchSvc,
+		lanService:    lanSvc,
+		updateService: updateSvc,
 	}
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.lanService.SetWailsContext(ctx)
+	a.updateService.SetWailsContext(ctx)
+	a.lanService.Start()
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	if a.lanService != nil {
+		a.lanService.Stop()
+	}
 }
 
 // GetConfig 获取当前配置
@@ -63,6 +75,9 @@ func (a *App) SaveConfig(cfg models.AppConfig) error {
 	if a.gameService.ValidateGameDir(cfg.GameDir) {
 		_ = a.prefService.SaveGamePreferences(cfg.GameDir, cfg.GamePreferences)
 	}
+	// 避免前端传递的旧 LanConfig 冲掉已切换的服务端/客户端角色
+	currentLan := a.lanService.GetLanConfig()
+	cfg.LanConfig = currentLan
 	return a.gameService.SaveConfig(cfg)
 }
 
@@ -202,13 +217,13 @@ func (a *App) GenerateMapThumbnail(tmxPath string) (string, error) {
 	return a.mapService.GenerateThumbnail(dir, tmxPath)
 }
 
-// BatchGenerateThumbnails 批量扫描为缺失缩略图的地图生成预览
-func (a *App) BatchGenerateThumbnails() (int, error) {
+// BatchGenerateThumbnails 批量扫描为地图生成或重绘高清出生点预览 (force=true 时全量强制重绘，覆盖已有未标记图；force=false 时仅补齐缺失)
+func (a *App) BatchGenerateThumbnails(force bool) (int, error) {
 	dir := a.gameService.Config.GameDir
 	if !a.gameService.ValidateGameDir(dir) {
 		return 0, fmt.Errorf("游戏路径未配置或无效")
 	}
-	return a.mapService.BatchGenerateMissingThumbnails(dir)
+	return a.mapService.BatchGenerateThumbnails(dir, force)
 }
 
 // GetGamePreferences 获取 preferences.ini 中的内置画质、高刷与帧率参数
@@ -264,4 +279,121 @@ func (a *App) OpenFolder(folderType string) error {
 		cmd = exec.Command("open", target)
 	}
 	return cmd.Start()
+}
+
+// GetLanConfig 获取当前局域网与同步设置
+func (a *App) GetLanConfig() models.LanConfig {
+	return a.lanService.GetLanConfig()
+}
+
+// SaveLanConfig 保存局域网配置
+func (a *App) SaveLanConfig(cfg models.LanConfig) error {
+	return a.lanService.SaveLanConfig(cfg)
+}
+
+// GetNetworkInterfaces 获取网卡列表
+func (a *App) GetNetworkInterfaces() []models.NetworkInterfaceInfo {
+	return a.lanService.GetNetworkInterfaces()
+}
+
+// SwitchLanRole 切换客户端/服务端角色
+func (a *App) SwitchLanRole(role string) error {
+	return a.lanService.SwitchRole(models.LanRole(role))
+}
+
+// GetLanStatus 获取局域网总览状态
+func (a *App) GetLanStatus() models.LanStatus {
+	return a.lanService.GetLanStatus()
+}
+
+// GetDiscoveredPeers 获取发现的所有节点
+func (a *App) GetDiscoveredPeers() []models.LanPeer {
+	return a.lanService.GetDiscoveredPeers()
+}
+
+// GetDynamicPreset 获取本机动态启动预设
+func (a *App) GetDynamicPreset() (*models.LaunchPreset, error) {
+	return a.lanService.GetDynamicPreset()
+}
+
+// RefreshDynamicPreset 强制刷新动态预设
+func (a *App) RefreshDynamicPreset() (*models.LaunchPreset, error) {
+	return a.lanService.RefreshDynamicPreset()
+}
+
+// ComparePresetWithServer 与指定服务端预设对比差异
+func (a *App) ComparePresetWithServer(serverIP string, serverPort int) (*models.SyncDiff, error) {
+	return a.lanService.ComparePresetWithServer(serverIP, serverPort)
+}
+
+// SyncFromHost 客户端从服务端同步完整预设 (文件与状态)
+func (a *App) SyncFromHost(serverIP string, serverPort int) error {
+	return a.lanService.SyncWithServer(serverIP, serverPort)
+}
+
+// RequestPushToHost 客户端发起推送文件给服务端
+func (a *App) RequestPushToHost(serverIP string, serverPort int, itemType string, fileName string) error {
+	return a.lanService.RequestPushToHost(serverIP, serverPort, itemType, fileName)
+}
+
+// HandlePushDecision 服务端审批客户端推送
+func (a *App) HandlePushDecision(requestID string, accept bool) error {
+	return a.lanService.HandlePushDecision(requestID, accept)
+}
+
+// GetPendingPushRequests 服务端获取待审批的推送
+func (a *App) GetPendingPushRequests() []models.PushRequest {
+	return a.lanService.GetPendingPushRequests()
+}
+
+// LaunchGameOnline 联机模式启动：检查冲突并强制从服务端同步预设后拉起游戏
+func (a *App) LaunchGameOnline() error {
+	dir := a.gameService.Config.GameDir
+	if !a.gameService.ValidateGameDir(dir) {
+		return fmt.Errorf("游戏路径未配置或无效")
+	}
+
+	st := a.lanService.GetLanStatus()
+	if st.HasServerConflict {
+		return fmt.Errorf("局域网检测到多个服务端冲突，操作已被禁止！请先在局域网面板中切换解决冲突")
+	}
+
+	if st.Role == models.RoleClient {
+		if st.ActiveServer == nil {
+			return fmt.Errorf("当前网络中未找到有效的房主服务端，请确认房主已启动并处于同一网络")
+		}
+		// 自动执行从服务端到客户端的完整同步 (下载缺失文件 + 同步启用状态)
+		if err := a.lanService.SyncWithServer(st.ActiveServer.IP, st.ActiveServer.HttpPort); err != nil {
+			return fmt.Errorf("联机前同步房主预设失败: %w", err)
+		}
+	} else if st.Role == models.RoleServer {
+		// 服务端即为房主：生成并更新本地动态预设，供所有连入的客户端同步
+		_, _ = a.lanService.RefreshDynamicPreset()
+	}
+
+	return a.launchService.LaunchGame(dir, a.gameService.Config.LaunchConfig)
+}
+
+// LaunchGameSingle 单机模式启动：以本机当前独立配置拉起游戏，不干涉联机预设
+func (a *App) LaunchGameSingle() error {
+	dir := a.gameService.Config.GameDir
+	if !a.gameService.ValidateGameDir(dir) {
+		return fmt.Errorf("游戏路径未配置或无效")
+	}
+	return a.launchService.LaunchGame(dir, a.gameService.Config.LaunchConfig)
+}
+
+// CheckForUpdates 统一检测更新 (同时检索局域网在线节点与 GitHub Releases)
+func (a *App) CheckForUpdates() (*models.UpdateInfo, error) {
+	return a.updateService.CheckForUpdates()
+}
+
+// DownloadAndApplyUpdate 下载更新包并执行平滑热替换与自动重启
+func (a *App) DownloadAndApplyUpdate(source string) error {
+	return a.updateService.DownloadAndApplyUpdate(models.UpdateSource(source))
+}
+
+// GetCurrentVersion 获取当前运行的应用版本号
+func (a *App) GetCurrentVersion() string {
+	return a.updateService.GetCurrentVersion()
 }
