@@ -274,7 +274,7 @@
   <div class="container">
     <!-- Header -->
     <header>
-      <div class="badge">Rusted Warfare Manager v1.0.0</div>
+      <div class="badge">Rusted Warfare Manager v1.2.0</div>
       <h1>🎮 铁锈战争 模组与地图管理器 · 使用说明书</h1>
       <p class="subtitle">专为《铁锈战争》打造的跨代工坊管理、原生出生点战术标绘、局域网联机预设同步与 P2P 极速自更新一体化工具</p>
     </header>
@@ -411,10 +411,13 @@
       <h3>参数与高刷新率调优</h3>
       <ul>
         <li><strong>电竞高刷新率支持：</strong>直写 <span class="code-tag">preferences.ini</span> 内置参数，支持 60Hz / 120Hz / 144Hz / 240Hz+ 电竞高刷屏，告别默认锁帧卡顿。</li>
-        <li><strong>JVM 内存上限调整：</strong>可一键拉升至 4096MB / 8192MB，避免大型战役或重度模组轰炸导致 Java 虚拟机内存溢出 (OOM)。</li>
+        <li><strong>JVM 内存上限与 G1GC 极致调优：</strong>支持一键拉升至 2048MB / 4096MB / 8192MB。<strong>推荐选用【内置 64位 JVM 模式】</strong>，直接突破官方原生 EXE 锁死 1000MB 的硬编码限制，自动配置初始堆预分配与 G1GC 低延迟垃圾回收器，彻底消除重度模组轰炸导致 Java 虚拟机内存溢出 (OOM) 崩溃。</li>
         <li><strong>垂直同步与 FPS 帧率显示：</strong>可视化开关，直接随游戏启动生效。</li>
         <li><strong>队伍单位上限限制：</strong>解除游戏内置造兵总人口限制，畅享大规模战役兵海推进。</li>
       </ul>
+      <div class="callout callout-success">
+        <span>💡 <strong>如何验证内存调优是否生效：</strong>启动游戏后，打开游戏目录下的 <span class="code-tag">lastrun.log</span> 日志文件，查找前 15 行的 <code>JVM maxMemory</code>。若使用【内置 JVM 模式】且设置为 4096MB，该数值将显示为约 <code>4294967296</code>（4GB）；而官方原生 EXE 启动器受限于自身源码 JNI 接口，始终锁定为 <code>1048576000</code>（1000MB）。</span>
+      </div>
     </section>
 
     <!-- 6. 双通道智能自更新体系 -->

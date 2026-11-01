@@ -1232,9 +1232,9 @@ func (r *MapRenderer) BatchRenderStandalone(mapsDir string, force bool) (int, er
 			pngPath := base + "_map.png"
 			pngPathUpper := base + "_map.PNG"
 			hasPng := false
-			if _, err := os.Stat(pngPath); err == nil {
+			if fi, err := os.Stat(pngPath); err == nil && !fi.IsDir() && fi.Size() > 0 {
 				hasPng = true
-			} else if _, err := os.Stat(pngPathUpper); err == nil {
+			} else if fi, err := os.Stat(pngPathUpper); err == nil && !fi.IsDir() && fi.Size() > 0 {
 				hasPng = true
 			}
 
@@ -1254,6 +1254,7 @@ func (r *MapRenderer) BatchRenderStandalone(mapsDir string, force bool) (int, er
 // BatchPatchPacks 批量处理 .rwmod 地图包 (force=true 时全量覆盖更新内部已有缩略图)
 func (r *MapRenderer) BatchPatchPacks(packPaths []string, force bool) (int, error) {
 	total := 0
+	var lastErr error
 	for _, packPath := range packPaths {
 		zr, err := zip.OpenReader(packPath)
 		if err != nil {
@@ -1263,16 +1264,18 @@ func (r *MapRenderer) BatchPatchPacks(packPaths []string, force bool) (int, erro
 		haveLower := make(map[string]bool)
 		var tmxs []string
 		for _, f := range zr.File {
-			low := strings.ToLower(f.Name)
-			haveLower[low] = true
-			if strings.HasSuffix(low, ".tmx") {
+			low := strings.TrimSuffix(strings.ToLower(filepath.ToSlash(f.Name)), "/")
+			if !f.FileInfo().IsDir() && f.UncompressedSize64 > 0 {
+				haveLower[low] = true
+			}
+			if strings.HasSuffix(strings.ToLower(f.Name), ".tmx") {
 				tmxs = append(tmxs, f.Name)
 			}
 		}
 
 		var todo []string
 		for _, tmx := range tmxs {
-			base := strings.TrimSuffix(tmx, filepath.Ext(tmx))
+			base := strings.TrimSuffix(filepath.ToSlash(tmx), filepath.Ext(tmx))
 			wantPng := strings.ToLower(base + "_map.png")
 			if force || !haveLower[wantPng] {
 				todo = append(todo, tmx)
@@ -1308,10 +1311,11 @@ func (r *MapRenderer) BatchPatchPacks(packPaths []string, force bool) (int, erro
 			}
 
 			base := strings.TrimSuffix(tmxEntry, filepath.Ext(tmxEntry))
-			wantPng := strings.ToLower(base + "_map.png")
+			wantPng := strings.ToLower(filepath.ToSlash(base + "_map.png"))
 			var existingBytes []byte
 			for _, f := range zr.File {
-				if strings.ToLower(filepath.ToSlash(f.Name)) == wantPng {
+				cleanEntry := strings.TrimSuffix(strings.ToLower(filepath.ToSlash(f.Name)), "/")
+				if cleanEntry == wantPng && !f.FileInfo().IsDir() && f.UncompressedSize64 > 0 {
 					if rc, err := f.Open(); err == nil {
 						existingBytes, _ = io.ReadAll(rc)
 						rc.Close()
@@ -1329,12 +1333,14 @@ func (r *MapRenderer) BatchPatchPacks(packPaths []string, force bool) (int, erro
 		zr.Close()
 
 		if len(newEntries) > 0 {
-			if err := UpdateZipEntriesMulti(packPath, newEntries); err == nil {
-				total += len(newEntries)
+			if err := UpdateZipEntriesMulti(packPath, newEntries); err != nil {
+				lastErr = fmt.Errorf("更新地图包 %s 失败: %w", filepath.Base(packPath), err)
+				continue
 			}
+			total += len(newEntries)
 		}
 	}
-	return total, nil
+	return total, lastErr
 }
 
 // UpdateZipEntry 安全替换 zip 文件中的单个条目
@@ -1346,13 +1352,13 @@ func UpdateZipEntry(packPath, entryName string, data []byte) error {
 func UpdateZipEntriesMulti(packPath string, entries map[string][]byte) error {
 	r, err := zip.OpenReader(packPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("open reader failed: %w", err)
 	}
 	defer r.Close()
 
 	tmpFile, err := os.CreateTemp(filepath.Dir(packPath), "patch_*.rwmod")
 	if err != nil {
-		return err
+		return fmt.Errorf("create temp failed: %w", err)
 	}
 	tmpPath := tmpFile.Name()
 	defer func() {
@@ -1363,26 +1369,39 @@ func UpdateZipEntriesMulti(packPath string, entries map[string][]byte) error {
 	w := zip.NewWriter(tmpFile)
 	lowAdded := make(map[string]bool)
 	for k := range entries {
-		lowAdded[strings.ToLower(filepath.ToSlash(k))] = true
+		lowAdded[strings.TrimSuffix(strings.ToLower(filepath.ToSlash(k)), "/")] = true
 	}
 
 	for _, f := range r.File {
-		if lowAdded[strings.ToLower(filepath.ToSlash(f.Name))] {
-			continue // 跳过旧版本
+		cleanName := strings.TrimSuffix(strings.ToLower(filepath.ToSlash(f.Name)), "/")
+		if lowAdded[cleanName] {
+			continue // 跳过旧版本 (无论是普通文件还是带尾部斜杠的旧目录条目)
 		}
+
+		if f.FileInfo().IsDir() || strings.HasSuffix(f.Name, "/") {
+			// 纯目录条目仅保留 Header，切勿调用 rc.Open() 与 io.Copy 读取数据流
+			header := f.FileHeader
+			header.Method = zip.Store
+			if _, err := w.CreateHeader(&header); err != nil {
+				return fmt.Errorf("create dir header %s failed: %w", f.Name, err)
+			}
+			continue
+		}
+
 		header := f.FileHeader
 		fw, err := w.CreateHeader(&header)
 		if err != nil {
-			return err
+			return fmt.Errorf("create header %s failed: %w", f.Name, err)
 		}
 		rc, err := f.Open()
 		if err != nil {
-			return err
+			// 若个别条目损坏无法打开，跳过该条目，避免整体中断
+			continue
 		}
 		_, err = io.Copy(fw, rc)
 		rc.Close()
 		if err != nil {
-			return err
+			return fmt.Errorf("copy entry %s failed: %w", f.Name, err)
 		}
 	}
 
@@ -1394,18 +1413,47 @@ func UpdateZipEntriesMulti(packPath string, entries map[string][]byte) error {
 		}
 		fw, err := w.CreateHeader(header)
 		if err != nil {
-			return err
+			return fmt.Errorf("create new header %s failed: %w", name, err)
 		}
 		if _, err := fw.Write(data); err != nil {
-			return err
+			return fmt.Errorf("write new data %s failed: %w", name, err)
 		}
 	}
 
 	if err := w.Close(); err != nil {
-		return err
+		return fmt.Errorf("close zip writer failed: %w", err)
 	}
 	tmpFile.Close()
 	r.Close()
 
-	return os.Rename(tmpPath, packPath)
+	// Windows 下目标文件若存在直接 Rename 可能被拒，进行带重试与回退的原子替换
+	bakPath := packPath + ".bak"
+	_ = os.Remove(bakPath)
+
+	var renameErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		renameErr = os.Rename(packPath, bakPath)
+		if renameErr == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if renameErr != nil {
+		return fmt.Errorf("rename original failed: %w", renameErr)
+	}
+
+	for attempt := 0; attempt < 5; attempt++ {
+		renameErr = os.Rename(tmpPath, packPath)
+		if renameErr == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if renameErr != nil {
+		// 回退还原
+		_ = os.Rename(bakPath, packPath)
+		return fmt.Errorf("rename tmp to pack failed: %w", renameErr)
+	}
+	_ = os.Remove(bakPath)
+	return nil
 }

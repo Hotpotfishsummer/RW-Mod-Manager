@@ -78,9 +78,23 @@ type GamePreferences struct {
 	UiRenderScale           float64 `json:"uiRenderScale"`           // UI 界面缩放倍率 (默认 1.0)
 }
 
+// GamePathItem 代表一个已检测到或用户保存的游戏安装路径项
+type GamePathItem struct {
+	Path       string `json:"path"`       // 游戏绝对路径
+	Source     string `json:"source"`     // 探测来源："steam" | "process" | "drive_scan" | "history" | "manual"
+	SourceName string `json:"sourceName"` // 友好来源描述，如 "Steam 官方注册表", "Steam 库 (C 盘)", "当前运行进程", "磁盘扫描 (E 盘)", "自定义添加"
+	IsValid    bool   `json:"isValid"`    // 是否为有效铁锈安装 (含 game-lib.jar 和 mods/)
+	Version    string `json:"version"`    // 检测到的游戏版本 (如 "1.15" 或 "Build 176")
+	ModCount   int    `json:"modCount"`   // 模组总数
+	MapCount   int    `json:"mapCount"`   // 地图总数
+	IsActive   bool   `json:"isActive"`   // 是否为当前选中的生效路径
+	LastUsed   int64  `json:"lastUsed"`   // 最后使用时间戳 (Unix 秒)
+}
+
 // AppConfig 管理器自身的全局配置
 type AppConfig struct {
 	GameDir         string          `json:"gameDir"`
+	KnownGameDirs   []string        `json:"knownGameDirs,omitempty"`
 	LaunchConfig    LaunchConfig    `json:"launchConfig"`
 	GamePreferences GamePreferences `json:"gamePreferences"`
 	LanConfig       LanConfig       `json:"lanConfig"`

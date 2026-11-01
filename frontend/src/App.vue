@@ -24,6 +24,8 @@ import {
   Eye,
   Check,
   Monitor,
+  Sun,
+  Moon,
   Flame,
   Activity,
   Radio,
@@ -45,13 +47,17 @@ import {
   ChevronDown,
   ChevronRight,
   Github,
-  ArrowUpCircle
+  ArrowUpCircle,
+  Copy,
+  Trash2,
+  Gamepad2
 } from 'lucide-vue-next'
 import { useApi } from './composables/useApi'
 import {
   ModItem,
   MapItem,
   GameStatus,
+  GamePathItem,
   AppConfig,
   LanConfig,
   LanStatus,
@@ -164,7 +170,7 @@ const pushHubType = ref<'mod' | 'map'>('mod')
 const pushHubTargetFile = ref<string>('')
 
 // 更新器状态
-const currentVersion = ref('1.0.0')
+const currentVersion = ref('1.2.0')
 const updateInfo = ref<UpdateInfo | null>(null)
 const updateProgress = ref<UpdateProgress | null>(null)
 const checkingUpdate = ref(false)
@@ -188,6 +194,22 @@ function showNotice(text: string, type: 'success' | 'error' | 'info' = 'success'
 
 const mods = ref<ModItem[]>([])
 const maps = ref<MapItem[]>([])
+
+// 游戏路径探测、选择与切换状态 (类似 L4D2 VPK Manager)
+const showPathModal = ref(false)
+const detectingPaths = ref(false)
+const detectedGameDirs = ref<GamePathItem[]>([])
+const switchingPath = ref(false)
+
+const activePathSourceLabel = computed(() => {
+  const active = detectedGameDirs.value.find(d => d.isActive || (gameStatus.value.gameDir && d.path.toLowerCase() === gameStatus.value.gameDir.toLowerCase()))
+  if (!active) return ''
+  return active.sourceName || active.source
+})
+
+const validGameDirsCount = computed(() => {
+  return detectedGameDirs.value.filter(d => d.isValid).length
+})
 
 // 模组视图模式与筛选
 const modViewMode = ref<'grid' | 'list'>('grid')
@@ -548,6 +570,23 @@ async function handleSaveSettings() {
   }
 }
 
+// 调整内存滑块时，若处于官方 EXE 模式自动切至内置 JVM 模式以确保生效
+function handleMemorySliderChange() {
+  if (appConfig.value?.launchConfig && appConfig.value.launchConfig.executableType !== 'java') {
+    appConfig.value.launchConfig.executableType = 'java'
+    showNotice('已自动切换至【内置 64位 JVM 模式】，自定义内存现已生效！')
+  }
+}
+
+// 快速预设内存
+function handleQuickSetMemory(mb: number) {
+  if (appConfig.value?.launchConfig) {
+    appConfig.value.launchConfig.maxMemoryMb = mb
+    appConfig.value.launchConfig.executableType = 'java'
+    showNotice(`已将内存上限设为 ${mb} MB 并激活内置 JVM 模式！`)
+  }
+}
+
 // 轮询与拉取局域网运行状态
 async function pollLanStatus() {
   try {
@@ -815,20 +854,125 @@ async function handleLaunchGame() {
   await handleLaunchOnline()
 }
 
-// 更换游戏目录
-async function handleChangeDir() {
+// 自动全盘重新探测所有游戏路径 (Steam注册表/Steam库/进程/磁盘扫描)
+async function runAutoDetectPaths(silent = false) {
+  detectingPaths.value = true
+  try {
+    const list = await api.detectGameDirs()
+    detectedGameDirs.value = list || []
+    const valids = (list || []).filter(d => d.isValid)
+    if (!silent) {
+      showNotice(`探测完成！共检索到 ${valids.length} 处有效铁锈战争安装`)
+    }
+    // 若当前路径无效且探测到了有效路径，自动绑定并激活首选路径
+    if (!gameStatus.value.isValid && valids.length > 0) {
+      await handleSwitchGamePath(valids[0].path, true)
+    }
+  } catch (err) {
+    if (!silent) showNotice(`自动探测路径失败: ${err}`, 'error')
+  } finally {
+    detectingPaths.value = false
+  }
+}
+
+// 加载已知与保存的游戏路径
+async function loadGameDirs(silent = false) {
+  try {
+    const list = await api.getKnownGameDirs()
+    detectedGameDirs.value = list || []
+    if (!gameStatus.value.isValid || detectedGameDirs.value.length === 0) {
+      await runAutoDetectPaths(true)
+    }
+  } catch (err) {
+    if (!silent) console.warn('获取游戏路径失败:', err)
+  }
+}
+
+// 切换生效游戏路径 (一键秒级切换)
+async function handleSwitchGamePath(dir: string, autoTriggered = false) {
+  if (switchingPath.value) return
+  switchingPath.value = true
+  loading.value = true
+  try {
+    const status = await api.switchGameDir(dir)
+    gameStatus.value = status
+    appConfig.value.gameDir = dir
+
+    // 更新各候选状态的 isActive 标记
+    detectedGameDirs.value.forEach(d => {
+      d.isActive = (d.path.toLowerCase() === dir.toLowerCase())
+    })
+
+    // 全量刷新模组、地图与局域网数据
+    await loadAllData()
+    await loadLanData()
+    showNotice(autoTriggered ? `已自动连接并激活游戏安装：${dir}` : `已成功切换游戏目录至：${dir}`)
+  } catch (err) {
+    showNotice(`切换游戏路径失败: ${err}`, 'error')
+  } finally {
+    switchingPath.value = false
+    loading.value = false
+  }
+}
+
+// 手动浏览选择并添加游戏目录
+async function handleBrowseAndAddPath() {
   const dir = await api.selectGameDir()
-  if (dir) {
-    try {
-      const status = await api.setGameDir(dir)
-      gameStatus.value = status
-      appConfig.value.gameDir = dir
+  if (!dir) return
+  try {
+    await api.addCustomGameDir(dir)
+    await handleSwitchGamePath(dir)
+    detectedGameDirs.value = (await api.getKnownGameDirs()) || []
+    showNotice(`已成功添加并切换到：${dir}`)
+  } catch (err) {
+    alert(`添加游戏目录失败: ${err}`)
+  }
+}
+
+// 移除已知游戏路径
+async function handleRemoveGamePath(dir: string) {
+  const isCurrent = dir.toLowerCase() === (gameStatus.value.gameDir || '').toLowerCase()
+  const ok = confirm(`确定要从管理列表中移除此游戏路径吗？\n${dir}${isCurrent ? '\n\n【注意】此路径为当前正在使用的路径，移除后将自动回退切换至其他可用安装。' : ''}`)
+  if (!ok) return
+
+  try {
+    const remaining = await api.removeKnownGameDir(dir)
+    detectedGameDirs.value = remaining || []
+    if (isCurrent) {
+      const cfg = await api.getConfig()
+      appConfig.value = cfg
+      gameStatus.value = await api.getGameStatus()
       await loadAllData()
       await loadLanData()
-    } catch (err) {
-      alert(err)
     }
+    showNotice('已从管理列表中移除该路径')
+  } catch (err) {
+    alert(`移除失败: ${err}`)
   }
+}
+
+// 在资源管理器中打开指定目录
+async function handleOpenPathInExplorer(targetPath: string) {
+  try {
+    await api.openPath(targetPath)
+  } catch (err) {
+    showNotice(`打开目录失败: ${err}`, 'error')
+  }
+}
+
+// 复制路径到剪贴板
+async function handleCopyPath(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    showNotice('路径已成功复制到剪贴板！')
+  } catch (err) {
+    showNotice('复制失败，请手动选中文本', 'error')
+  }
+}
+
+// 打开游戏路径管理与切换弹窗 (类似 L4D2 VPK Manager)
+function handleChangeDir() {
+  showPathModal.value = true
 }
 
 // 打开外部工坊链接
@@ -880,9 +1024,67 @@ async function handlePerformUpdate() {
   }
 }
 
+// ==========================================
+// 主题模式管理 (Material Design 3 Theme)
+// 支持: 'light' (明亮) | 'dark' (暗黑) | 'auto' (跟随系统)
+// ==========================================
+type ThemeMode = 'light' | 'dark' | 'auto'
+const themeMode = ref<ThemeMode>('auto')
+const isSystemDark = ref<boolean>(false)
+const showThemeMenu = ref<boolean>(false)
+
+function applyTheme(mode: ThemeMode) {
+  themeMode.value = mode
+  try {
+    localStorage.setItem('rw_theme_mode', mode)
+  } catch (e) {}
+
+  if (typeof window !== 'undefined') {
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+    isSystemDark.value = prefersDark
+    const shouldBeDark = mode === 'dark' || (mode === 'auto' && prefersDark)
+    if (shouldBeDark) {
+      document.documentElement.classList.add('dark')
+    } else {
+      document.documentElement.classList.remove('dark')
+    }
+  }
+}
+
+function cycleTheme() {
+  if (themeMode.value === 'auto') {
+    applyTheme('light')
+  } else if (themeMode.value === 'light') {
+    applyTheme('dark')
+  } else {
+    applyTheme('auto')
+  }
+}
+
 onMounted(() => {
+  // 初始化主题设置与系统深浅色偏好监听
+  try {
+    const savedTheme = (localStorage.getItem('rw_theme_mode') as ThemeMode) || 'auto'
+    applyTheme(savedTheme)
+    if (typeof window !== 'undefined') {
+      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+      isSystemDark.value = mediaQuery.matches
+      mediaQuery.addEventListener('change', (e) => {
+        isSystemDark.value = e.matches
+        if (themeMode.value === 'auto') {
+          if (e.matches) {
+            document.documentElement.classList.add('dark')
+          } else {
+            document.documentElement.classList.remove('dark')
+          }
+        }
+      })
+    }
+  } catch (e) {}
+
   loadAllData()
   loadLanData()
+  loadGameDirs(true)
 
   api.getCurrentVersion().then(v => {
     if (v) currentVersion.value = v
@@ -942,43 +1144,57 @@ onMounted(() => {
 <template>
   <div class="flex flex-col h-screen w-screen overflow-hidden font-sans">
     <!-- 顶部导航栏 (Material Design 3 Top App Bar) -->
-    <header class="flex items-center justify-between px-6 py-3 bg-m3-surface-low border-b border-m3-outline-variant shrink-0 gap-4">
-      <!-- 左侧：品牌信息与全局连接状态 (纯展示与导航) -->
-      <div class="flex items-center gap-3.5 min-w-0 shrink-0">
+    <header class="flex items-center justify-between px-3 sm:px-6 py-2.5 bg-m3-surface-low border-b border-m3-outline-variant shrink-0 gap-2 sm:gap-4 overflow-hidden">
+      <!-- 左侧：品牌信息与全局连接状态 (纯展示与导航，小窗口时优先隐藏文字以保障右侧操作按钮完整展示) -->
+      <div class="flex items-center gap-2 sm:gap-3.5 min-w-0 shrink">
         <!-- Logo 与标题 -->
-        <div class="flex items-center gap-3 shrink-0">
-          <div class="w-9 h-9 rounded-xl bg-m3-primary-container text-m3-primary flex items-center justify-center shadow-m3-1 shrink-0">
+        <div class="flex items-center gap-2.5 sm:gap-3 shrink-0">
+          <div
+            class="w-9 h-9 rounded-xl bg-m3-primary-container text-m3-primary flex items-center justify-center shadow-m3-1 shrink-0 cursor-default select-none"
+            title="铁锈战争 模组与地图管理器 (Rusted Warfare Workshop & LAN Sync Manager)"
+          >
             <Cpu class="w-5 h-5 text-m3-on-primary-container" />
           </div>
-          <div class="shrink-0">
+          <!-- 文字描述：小窗口或窄屏下自动隐藏，优先展示右侧功能操作与启动按钮 -->
+          <div class="hidden xl:flex flex-col shrink-0 min-w-0">
             <h1 class="text-sm font-bold tracking-tight text-m3-on-surface whitespace-nowrap">
               铁锈战争 模组与地图管理器
             </h1>
-            <p class="text-[10px] text-m3-on-surface-variant font-medium tracking-wide whitespace-nowrap">Rusted Warfare Workshop & LAN Sync Manager</p>
+            <p class="text-[10px] text-m3-on-surface-variant font-medium tracking-wide whitespace-nowrap hidden 2xl:block">
+              Rusted Warfare Workshop & LAN Sync Manager
+            </p>
           </div>
         </div>
 
-        <!-- 游戏路径状态胶囊 (M3 Assist Chip) -->
-        <div class="hidden md:flex items-center h-8 gap-2 px-3 rounded-xl bg-m3-surface-container border border-m3-outline text-xs shrink-0">
+        <!-- 游戏路径状态胶囊 (M3 Assist Chip & Quick Switcher - 类似 L4D2 VPK Manager) -->
+        <button
+          @click="showPathModal = true"
+          type="button"
+          class="hidden sm:flex items-center h-8 gap-1.5 sm:gap-2 px-2.5 sm:px-3 rounded-xl bg-m3-surface-container hover:bg-m3-surface-high border border-m3-outline hover:border-m3-primary/60 text-xs shrink min-w-0 transition shadow-sm group select-none text-left cursor-pointer"
+          :title="gameStatus.gameDir ? `当前游戏根目录:\n${gameStatus.gameDir}\n\n点击探测、管理与快速切换游戏安装路径` : '点击自动探测或选择游戏目录'"
+        >
           <span
-            class="w-2 h-2 rounded-full shrink-0"
-            :class="gameStatus.isValid ? 'bg-m3-success' : 'bg-m3-error'"
+            class="w-2.5 h-2.5 rounded-full shrink-0 transition-transform group-hover:scale-125"
+            :class="gameStatus.isValid ? 'bg-m3-success shadow-[0_0_8px_rgba(74,222,128,0.5)]' : 'bg-m3-error shadow-[0_0_8px_rgba(248,113,113,0.7)] animate-pulse'"
           />
-          <span class="text-m3-on-surface font-mono text-xs truncate max-w-[140px] xl:max-w-xs whitespace-nowrap" :title="gameStatus.gameDir">
-            {{ gameStatus.gameDir || '未配置游戏路径' }}
-          </span>
-          <button
-            @click="handleChangeDir"
-            class="ml-1 text-m3-primary hover:text-m3-primary-hover font-medium transition whitespace-nowrap"
-          >
-            更换
-          </button>
-        </div>
+          <div class="flex items-center gap-1.5 truncate max-w-[110px] md:max-w-[150px] xl:max-w-xs font-mono text-xs min-w-0">
+            <span
+              v-if="activePathSourceLabel"
+              class="px-1.5 py-0.5 rounded text-[10px] bg-m3-primary/10 text-m3-primary font-sans font-semibold tracking-wide shrink-0 hidden md:inline"
+            >
+              {{ activePathSourceLabel }}
+            </span>
+            <span class="text-m3-on-surface truncate">
+              {{ gameStatus.gameDir || '未配置游戏路径' }}
+            </span>
+          </div>
+          <ChevronDown class="w-3.5 h-3.5 text-m3-on-surface-variant group-hover:text-m3-primary transition-transform duration-200 group-hover:translate-y-0.5 shrink-0" />
+        </button>
 
-        <!-- 局域网状态胶囊 (M3 Status Chip) -->
+        <!-- 局域网状态胶囊 (M3 Status Chip) - 宽屏显示，中窄屏时在下方导航Tab标签中已有实时指示 -->
         <div
           @click="currentTab = 'lan'"
-          class="cursor-pointer hidden lg:flex items-center h-8 gap-2 px-3 rounded-xl border text-xs font-medium transition hover:brightness-110 shrink-0 whitespace-nowrap"
+          class="cursor-pointer hidden xl:flex items-center h-8 gap-2 px-3 rounded-xl border text-xs font-medium transition hover:brightness-110 shrink-0 whitespace-nowrap"
           :class="
             lanStatus.hasServerConflict
               ? 'bg-m3-error-container/70 border-m3-error/60 text-m3-on-error-container animate-pulse'
@@ -1005,14 +1221,14 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- 右侧全局操作区 (所有工具按统一规格 h-8, rounded-xl 布局) -->
-      <div class="flex items-center gap-2.5 shrink-0">
+      <!-- 右侧全局操作区 (所有工具按统一规格 h-8, rounded-xl 布局，高优先级永不被推挤隐藏) -->
+      <div class="flex items-center gap-2 sm:gap-2.5 shrink-0 ml-auto">
         <!-- 1. 顶部快速角色切换器 (M3 Segmented Button) -->
         <div class="hidden sm:flex items-center h-8 rounded-xl bg-m3-surface-container border border-m3-outline p-0.5 shrink-0">
           <button
             @click="handleSwitchRole('client')"
             title="设为客户端 (参与对战成员，游戏预设以房主为准自动同步)"
-            class="h-7 px-3 rounded-lg transition flex items-center gap-1.5 text-xs font-medium whitespace-nowrap"
+            class="h-7 px-2.5 sm:px-3 rounded-lg transition flex items-center gap-1.5 text-xs font-medium whitespace-nowrap"
             :class="lanStatus.role === 'client' ? 'bg-m3-primary text-white font-semibold shadow-sm' : 'text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-high'"
           >
             <UserCheck class="w-3.5 h-3.5 shrink-0" />
@@ -1021,7 +1237,7 @@ onMounted(() => {
           <button
             @click="handleSwitchRole('server')"
             title="设为服务端 (局域网房主，将发布模组预设并充当主机)"
-            class="h-7 px-3 rounded-lg transition flex items-center gap-1.5 text-xs font-medium whitespace-nowrap"
+            class="h-7 px-2.5 sm:px-3 rounded-lg transition flex items-center gap-1.5 text-xs font-medium whitespace-nowrap"
             :class="lanStatus.role === 'server' ? 'bg-m3-primary text-white font-semibold shadow-sm' : 'text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-high'"
           >
             <Server class="w-3.5 h-3.5 shrink-0" />
@@ -1037,18 +1253,18 @@ onMounted(() => {
           <button
             @click="api.openFolder('units')"
             title="打开单位模组文件夹"
-            class="h-7 px-2.5 text-xs font-medium text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-high rounded-lg transition flex items-center gap-1.5 whitespace-nowrap"
+            class="h-7 px-2 sm:px-2.5 text-xs font-medium text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-high rounded-lg transition flex items-center gap-1.5 whitespace-nowrap"
           >
             <FolderOpen class="w-3.5 h-3.5 text-m3-primary shrink-0" />
-            <span>模组</span>
+            <span class="hidden md:inline">模组</span>
           </button>
           <button
             @click="api.openFolder('maps')"
             title="打开地图文件夹"
-            class="h-7 px-2.5 text-xs font-medium text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-high rounded-lg transition flex items-center gap-1.5 whitespace-nowrap"
+            class="h-7 px-2 sm:px-2.5 text-xs font-medium text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-high rounded-lg transition flex items-center gap-1.5 whitespace-nowrap"
           >
             <FolderOpen class="w-3.5 h-3.5 text-m3-success shrink-0" />
-            <span>地图</span>
+            <span class="hidden md:inline">地图</span>
           </button>
         </div>
 
@@ -1062,11 +1278,71 @@ onMounted(() => {
           <RefreshCw class="w-4 h-4 shrink-0" :class="{ 'animate-spin': loading }" />
         </button>
 
-        <!-- 4. 版本号与更新检查胶囊 (M3 Assist Chip) -->
+        <!-- 4. 主题外观切换器 (M3 Theme Toggle & Menu) -->
+        <div class="relative shrink-0">
+          <button
+            @click="showThemeMenu = !showThemeMenu"
+            class="h-8 px-2 sm:px-2.5 rounded-xl bg-m3-surface-container hover:bg-m3-surface-high border border-m3-outline text-m3-on-surface-variant hover:text-m3-on-surface text-xs font-medium flex items-center gap-1.5 transition shrink-0 whitespace-nowrap"
+            :title="`主题外观: ${themeMode === 'auto' ? '跟随系统' : themeMode === 'light' ? '明亮模式' : '暗黑模式'} (点击展开)`"
+          >
+            <Sun v-if="themeMode === 'light'" class="w-3.5 h-3.5 text-amber-500 shrink-0" />
+            <Moon v-else-if="themeMode === 'dark'" class="w-3.5 h-3.5 text-m3-primary shrink-0" />
+            <Monitor v-else class="w-3.5 h-3.5 text-m3-on-surface-variant shrink-0" />
+            <span class="hidden 2xl:inline text-[11px]">
+              {{ themeMode === 'auto' ? '跟随系统' : themeMode === 'light' ? '明亮' : '暗黑' }}
+            </span>
+            <ChevronDown class="w-3 h-3 text-m3-on-surface-dim transition-transform duration-200" :class="{ 'rotate-180': showThemeMenu }" />
+          </button>
+
+          <!-- 遮罩 (点击其他区域关闭菜单) -->
+          <div v-if="showThemeMenu" @click="showThemeMenu = false" class="fixed inset-0 z-40" />
+
+          <!-- 下拉菜单浮层 -->
+          <div
+            v-if="showThemeMenu"
+            class="absolute right-0 mt-1.5 w-36 py-1 bg-m3-surface-container border border-m3-outline rounded-xl shadow-m3-2 z-50 overflow-hidden text-xs"
+          >
+            <button
+              @click="applyTheme('light'); showThemeMenu = false"
+              class="w-full px-3 py-2 flex items-center justify-between text-left hover:bg-m3-surface-high transition"
+              :class="themeMode === 'light' ? 'text-m3-primary font-semibold bg-m3-primary/10' : 'text-m3-on-surface'"
+            >
+              <div class="flex items-center gap-2">
+                <Sun class="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                <span>明亮模式</span>
+              </div>
+              <Check v-if="themeMode === 'light'" class="w-3.5 h-3.5 text-m3-primary shrink-0" />
+            </button>
+            <button
+              @click="applyTheme('dark'); showThemeMenu = false"
+              class="w-full px-3 py-2 flex items-center justify-between text-left hover:bg-m3-surface-high transition"
+              :class="themeMode === 'dark' ? 'text-m3-primary font-semibold bg-m3-primary/10' : 'text-m3-on-surface'"
+            >
+              <div class="flex items-center gap-2">
+                <Moon class="w-3.5 h-3.5 text-m3-primary shrink-0" />
+                <span>暗黑模式</span>
+              </div>
+              <Check v-if="themeMode === 'dark'" class="w-3.5 h-3.5 text-m3-primary shrink-0" />
+            </button>
+            <button
+              @click="applyTheme('auto'); showThemeMenu = false"
+              class="w-full px-3 py-2 flex items-center justify-between text-left hover:bg-m3-surface-high transition"
+              :class="themeMode === 'auto' ? 'text-m3-primary font-semibold bg-m3-primary/10' : 'text-m3-on-surface'"
+            >
+              <div class="flex items-center gap-2">
+                <Monitor class="w-3.5 h-3.5 text-m3-on-surface-variant shrink-0" />
+                <span>跟随系统</span>
+              </div>
+              <Check v-if="themeMode === 'auto'" class="w-3.5 h-3.5 text-m3-primary shrink-0" />
+            </button>
+          </div>
+        </div>
+
+        <!-- 5. 版本号与更新检查胶囊 (M3 Assist Chip) - 常规版本号在极窄窗口时隐藏，有新版推送时高亮常显 -->
         <button
           v-if="updateInfo?.hasUpdate"
           @click="showUpdateModal = true"
-          class="h-8 px-3 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-xs font-semibold flex items-center gap-1.5 transition active:scale-95 animate-pulse shadow-sm shrink-0 whitespace-nowrap"
+          class="h-8 px-2.5 sm:px-3 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-xs font-semibold flex items-center gap-1.5 transition active:scale-95 animate-pulse shadow-sm shrink-0 whitespace-nowrap"
           title="检测到新版本，点击查看并一键自更新"
         >
           <Sparkles class="w-3.5 h-3.5 text-amber-400 shrink-0" />
@@ -1076,20 +1352,20 @@ onMounted(() => {
           v-else
           @click="handleCheckUpdate(false)"
           :disabled="checkingUpdate"
-          class="h-8 px-2.5 rounded-xl bg-m3-surface-container hover:bg-m3-surface-high border border-m3-outline text-m3-on-surface-variant hover:text-m3-on-surface text-[11px] font-mono flex items-center gap-1.5 transition disabled:opacity-50 shrink-0 whitespace-nowrap"
+          class="hidden lg:flex h-8 px-2.5 rounded-xl bg-m3-surface-container hover:bg-m3-surface-high border border-m3-outline text-m3-on-surface-variant hover:text-m3-on-surface text-[11px] font-mono items-center gap-1.5 transition disabled:opacity-50 shrink-0 whitespace-nowrap"
           title="点击检查局域网与 GitHub 更新"
         >
           <ArrowUpCircle class="w-3.5 h-3.5 text-m3-primary shrink-0" :class="{ 'animate-spin': checkingUpdate }" />
           <span>v{{ currentVersion }}</span>
         </button>
 
-        <!-- 5. 双模启动按钮组 (M3 Filled & Tonal Buttons) -->
-        <div class="flex items-center gap-2 shrink-0">
+        <!-- 6. 双模启动按钮组 (M3 Filled & Tonal Buttons) - 核心操作区，最高展示优先级 -->
+        <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
           <!-- 联机模式启动 (M3 Filled Primary Button) -->
           <button
             @click="handleLaunchOnline"
             :disabled="launching || !gameStatus.isValid || lanStatus.hasServerConflict"
-            class="h-8 flex items-center gap-2 px-3.5 bg-m3-primary hover:bg-m3-primary-hover text-white font-semibold text-xs rounded-xl shadow-m3-1 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap shrink-0"
+            class="h-8 flex items-center gap-1.5 sm:gap-2 px-3 sm:px-3.5 bg-m3-primary hover:bg-m3-primary-hover text-white font-semibold text-xs rounded-xl shadow-m3-1 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap shrink-0"
             :title="lanStatus.role === 'server' ? '以房主服务端启动：发布当前模组预设并启动游戏' : '以客户端启动：自动对齐房主预设后启动游戏'"
           >
             <Rocket class="w-3.5 h-3.5 shrink-0" :class="{ 'animate-bounce': launching }" />
@@ -1108,7 +1384,7 @@ onMounted(() => {
           <button
             @click="handleLaunchSingle"
             :disabled="launching || !gameStatus.isValid"
-            class="h-8 flex items-center gap-1.5 px-3 bg-m3-surface-container hover:bg-m3-surface-high text-m3-on-surface border border-m3-outline font-medium text-xs rounded-xl transition active:scale-95 disabled:opacity-40 whitespace-nowrap shrink-0"
+            class="h-8 flex items-center gap-1.5 px-2.5 sm:px-3 bg-m3-surface-container hover:bg-m3-surface-high text-m3-on-surface border border-m3-outline font-medium text-xs rounded-xl transition active:scale-95 disabled:opacity-40 whitespace-nowrap shrink-0"
             title="以单机模式启动：使用本地当前模组配置，不检查局域网预设冲突"
           >
             <Play class="w-3.5 h-3.5 text-m3-on-surface-variant shrink-0" />
@@ -1206,7 +1482,56 @@ onMounted(() => {
     </nav>
 
     <!-- 主体内容区域 -->
-    <main class="flex-1 overflow-hidden relative">
+    <main class="flex-1 overflow-hidden relative flex flex-col">
+      <!-- 全局未绑定路径引导横幅 (仅在未检测到有效游戏路径时显示) -->
+      <div v-if="!gameStatus.isValid" class="m-6 mb-0 p-4 rounded-2xl bg-m3-surface-container border border-amber-500/40 bg-amber-500/10 text-xs shadow-md shrink-0">
+        <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div class="flex items-start gap-3.5">
+            <div class="p-2.5 rounded-xl bg-amber-500/20 text-amber-400 shrink-0">
+              <AlertTriangle class="w-5 h-5" />
+            </div>
+            <div>
+              <h4 class="text-sm font-bold text-m3-on-surface mb-0.5">尚未检测到有效的《铁锈战争》游戏根目录</h4>
+              <p class="text-m3-on-surface-variant leading-relaxed">
+                请配置包含 <code class="px-1.5 py-0.5 rounded bg-m3-surface-high font-mono text-[11px] text-m3-primary border border-m3-outline">game-lib.jar</code> 与 <code class="px-1.5 py-0.5 rounded bg-m3-surface-high font-mono text-[11px] text-m3-primary border border-m3-outline">mods/</code> 的安装目录，以便加载模组、地图与预设。
+              </p>
+              
+              <!-- 自动探测到的候选项快捷选择 -->
+              <div v-if="validGameDirsCount > 0" class="mt-2.5 flex flex-wrap items-center gap-2">
+                <span class="text-[11px] text-m3-on-surface font-semibold shrink-0">已自动探测到可用安装：</span>
+                <button
+                  v-for="cand in detectedGameDirs.filter(d => d.isValid)"
+                  :key="cand.path"
+                  @click="handleSwitchGamePath(cand.path)"
+                  class="px-2.5 py-1 rounded-xl bg-m3-surface-high hover:bg-m3-surface-highest border border-m3-outline hover:border-m3-primary text-xs text-m3-on-surface flex items-center gap-1.5 transition group"
+                >
+                  <span class="px-1.5 py-0.5 rounded text-[10px] bg-m3-primary/10 text-m3-primary font-medium">{{ cand.sourceName }}</span>
+                  <span class="font-mono text-[11px] truncate max-w-[220px]">{{ cand.path }}</span>
+                  <span class="text-m3-success font-semibold text-[11px] group-hover:underline">⚡ 立即切换</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2 shrink-0 self-end md:self-center">
+            <button
+              @click="runAutoDetectPaths(false)"
+              :disabled="detectingPaths"
+              class="px-3.5 py-2 bg-m3-primary hover:bg-m3-primary-hover text-white rounded-xl text-xs font-semibold shadow-sm flex items-center gap-1.5 transition active:scale-95 disabled:opacity-50"
+            >
+              <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': detectingPaths }" />
+              <span>{{ detectingPaths ? '正在探测...' : '自动探测全盘' }}</span>
+            </button>
+            <button
+              @click="handleBrowseAndAddPath"
+              class="px-3.5 py-2 bg-m3-surface-high hover:bg-m3-surface-highest text-m3-on-surface rounded-xl text-xs font-medium border border-m3-outline transition active:scale-95 flex items-center gap-1.5"
+            >
+              <FolderOpen class="w-3.5 h-3.5" />
+              <span>手动浏览</span>
+            </button>
+          </div>
+        </div>
+      </div>
       <!-- 1. 单位模组管理 Tab -->
       <section v-if="currentTab === 'units'" class="h-full flex flex-col p-6 overflow-hidden">
         <!-- 搜索与筛选操作栏 -->
@@ -2878,27 +3203,39 @@ onMounted(() => {
 
           <!-- 4. 启动器主程序与 JVM 堆内存 (M3 Radio Selection Cards) -->
           <div class="p-5 bg-m3-surface-container border border-m3-outline rounded-2xl space-y-4">
-            <label class="text-xs font-semibold text-m3-on-surface">启动程序与内存分配</label>
+            <div class="flex items-center justify-between">
+              <div>
+                <label class="text-xs font-semibold text-m3-on-surface">启动主程序与 JVM 堆内存分配</label>
+                <p class="text-[11px] text-m3-on-surface-dim mt-0.5">选择游戏拉起核心。为防止重度模组轰炸导致 OOM 闪退，推荐使用【内置 64位 JVM 模式】。</p>
+              </div>
+            </div>
+
             <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
               <label
-                class="flex items-center gap-3 p-3.5 rounded-xl border cursor-pointer transition shadow-sm"
-                :class="appConfig.launchConfig.executableType === 'exe64' ? 'bg-m3-primary-container/25 border-m3-primary text-m3-on-surface' : 'bg-m3-surface-high border-m3-outline-variant text-m3-on-surface-variant hover:border-m3-outline'"
+                class="flex items-center gap-3 p-3.5 rounded-xl border cursor-pointer transition shadow-sm relative overflow-hidden"
+                :class="appConfig.launchConfig.executableType === 'java' ? 'bg-m3-primary-container/25 border-m3-primary text-m3-on-surface ring-1 ring-m3-primary' : 'bg-m3-surface-high border-m3-outline-variant text-m3-on-surface-variant hover:border-m3-outline'"
               >
-                <input type="radio" v-model="appConfig.launchConfig.executableType" value="exe64" class="hidden" />
-                <div>
-                  <div class="text-xs font-bold text-m3-on-surface">Rusted Warfare - 64.exe</div>
-                  <div class="text-[11px] text-m3-on-surface-dim mt-0.5">64 位原生主程序（推荐）</div>
+                <input type="radio" v-model="appConfig.launchConfig.executableType" value="java" class="hidden" />
+                <div class="flex-1">
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-xs font-bold text-m3-on-surface">内置 64位 JVM 模式</span>
+                    <span class="px-1.5 py-0.2 text-[10px] font-bold bg-m3-primary/20 text-m3-primary rounded">推荐</span>
+                  </div>
+                  <div class="text-[11px] text-m3-on-surface-dim mt-0.5">解锁 4G~8G+ 内存分配与 G1GC 调优</div>
                 </div>
               </label>
 
               <label
                 class="flex items-center gap-3 p-3.5 rounded-xl border cursor-pointer transition shadow-sm"
-                :class="appConfig.launchConfig.executableType === 'java' ? 'bg-m3-primary-container/25 border-m3-primary text-m3-on-surface' : 'bg-m3-surface-high border-m3-outline-variant text-m3-on-surface-variant hover:border-m3-outline'"
+                :class="appConfig.launchConfig.executableType === 'exe64' ? 'bg-m3-primary-container/25 border-m3-primary text-m3-on-surface' : 'bg-m3-surface-high border-m3-outline-variant text-m3-on-surface-variant hover:border-m3-outline'"
               >
-                <input type="radio" v-model="appConfig.launchConfig.executableType" value="java" class="hidden" />
-                <div>
-                  <div class="text-xs font-bold text-m3-on-surface">内置 JVM 模式</div>
-                  <div class="text-[11px] text-m3-on-surface-dim mt-0.5">允许自定义 JVM 内存 (-Xmx)</div>
+                <input type="radio" v-model="appConfig.launchConfig.executableType" value="exe64" class="hidden" />
+                <div class="flex-1">
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-xs font-bold text-m3-on-surface">Rusted Warfare - 64.exe</span>
+                    <span class="px-1.5 py-0.2 text-[10px] font-bold bg-m3-warning/20 text-m3-warning rounded">锁定 1GB</span>
+                  </div>
+                  <div class="text-[11px] text-m3-on-surface-dim mt-0.5">官方原生程序（受底层限制写死 1000MB）</div>
                 </div>
               </label>
 
@@ -2907,17 +3244,58 @@ onMounted(() => {
                 :class="appConfig.launchConfig.executableType === 'exe32' ? 'bg-m3-primary-container/25 border-m3-primary text-m3-on-surface' : 'bg-m3-surface-high border-m3-outline-variant text-m3-on-surface-variant hover:border-m3-outline'"
               >
                 <input type="radio" v-model="appConfig.launchConfig.executableType" value="exe32" class="hidden" />
-                <div>
-                  <div class="text-xs font-bold text-m3-on-surface">Rusted Warfare.exe</div>
-                  <div class="text-[11px] text-m3-on-surface-dim mt-0.5">32 位兼容模式</div>
+                <div class="flex-1">
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-xs font-bold text-m3-on-surface">Rusted Warfare.exe</span>
+                    <span class="px-1.5 py-0.2 text-[10px] font-bold bg-m3-surface-dim text-m3-on-surface-dim rounded">32位</span>
+                  </div>
+                  <div class="text-[11px] text-m3-on-surface-dim mt-0.5">32 位兼容模式（最大限制约 500MB）</div>
                 </div>
               </label>
             </div>
 
-            <!-- JVM 堆内存滑块 -->
-            <div class="pt-2 space-y-2">
+            <!-- 模式状态提示条 -->
+            <div
+              v-if="appConfig.launchConfig.executableType === 'java'"
+              class="flex items-start gap-2.5 p-3 bg-m3-primary-container/15 border border-m3-primary/30 rounded-xl text-xs text-m3-on-surface"
+            >
+              <Sparkles class="w-4 h-4 text-m3-primary shrink-0 mt-0.5" />
+              <div class="space-y-0.5">
+                <div class="font-semibold text-m3-primary">已激活原生 JVM 深度调优</div>
+                <div class="text-[11px] text-m3-on-surface-variant">
+                  当前最大堆内存上限设定为 <span class="font-bold text-m3-primary font-mono">{{ appConfig.launchConfig.maxMemoryMb }} MB</span>。启动时将自动配置初始堆预分配 (-Xms)、启用低延迟 G1GC 垃圾回收器并无缝记录 lastrun.log，彻底告别模组 OOM 闪退。
+                </div>
+              </div>
+            </div>
+
+            <div
+              v-else
+              class="flex items-center justify-between gap-3 p-3 bg-m3-warning/10 border border-m3-warning/40 rounded-xl text-xs"
+            >
+              <div class="flex items-start gap-2.5">
+                <AlertTriangle class="w-4 h-4 text-m3-warning shrink-0 mt-0.5" />
+                <div>
+                  <span class="font-semibold text-m3-warning block">注意：当前官方 EXE 模式下自定义内存无法生效</span>
+                  <span class="text-[11px] text-m3-on-surface-variant">
+                    官方 EXE 启动器受底层 JNI 限制硬编码固定了 1000MB 堆上限，下方的内存滑块在此模式下不会生效。如需为游戏分配 {{ appConfig.launchConfig.maxMemoryMb }}MB 内存，请切换为内置 JVM 模式。
+                  </span>
+                </div>
+              </div>
+              <button
+                @click="appConfig.launchConfig.executableType = 'java'"
+                class="px-3 py-1.5 bg-m3-primary hover:bg-m3-primary-hover text-white font-medium text-xs rounded-lg shrink-0 transition shadow-sm"
+              >
+                一键激活 JVM 模式
+              </button>
+            </div>
+
+            <!-- JVM 堆内存滑块与快捷预设 -->
+            <div class="pt-2 space-y-3">
               <div class="flex justify-between items-center mb-1">
-                <span class="text-xs text-m3-on-surface font-medium">JVM 最大内存分配 (-Xmx)</span>
+                <div>
+                  <span class="text-xs text-m3-on-surface font-medium">JVM 最大内存分配 (-Xmx)</span>
+                  <span class="text-[11px] text-m3-on-surface-dim ml-2 font-mono">（仅内置 JVM 模式生效）</span>
+                </div>
                 <span class="text-xs font-mono font-bold text-m3-primary bg-m3-surface-high px-2.5 py-0.5 rounded-lg border border-m3-outline">
                   {{ appConfig.launchConfig.maxMemoryMb }} MB
                 </span>
@@ -2928,8 +3306,46 @@ onMounted(() => {
                 max="8192"
                 step="512"
                 v-model.number="appConfig.launchConfig.maxMemoryMb"
+                @input="handleMemorySliderChange"
                 class="w-full cursor-pointer"
               />
+
+              <!-- 快捷预设按钮 -->
+              <div class="flex items-center gap-2 pt-1 text-xs">
+                <span class="text-[11px] text-m3-on-surface-dim">快捷预设:</span>
+                <button
+                  type="button"
+                  @click="handleQuickSetMemory(1024)"
+                  class="px-2.5 py-1 rounded-lg border transition text-[11px]"
+                  :class="appConfig.launchConfig.maxMemoryMb === 1024 ? 'bg-m3-primary/20 border-m3-primary text-m3-primary font-bold' : 'bg-m3-surface-high border-m3-outline-variant text-m3-on-surface-dim hover:text-m3-on-surface'"
+                >
+                  1024 MB (原版)
+                </button>
+                <button
+                  type="button"
+                  @click="handleQuickSetMemory(2048)"
+                  class="px-2.5 py-1 rounded-lg border transition text-[11px]"
+                  :class="appConfig.launchConfig.maxMemoryMb === 2048 ? 'bg-m3-primary/20 border-m3-primary text-m3-primary font-bold' : 'bg-m3-surface-high border-m3-outline-variant text-m3-on-surface-dim hover:text-m3-on-surface'"
+                >
+                  2048 MB (轻度模组)
+                </button>
+                <button
+                  type="button"
+                  @click="handleQuickSetMemory(4096)"
+                  class="px-2.5 py-1 rounded-lg border transition text-[11px]"
+                  :class="appConfig.launchConfig.maxMemoryMb === 4096 ? 'bg-m3-primary/20 border-m3-primary text-m3-primary font-bold' : 'bg-m3-surface-high border-m3-outline-variant text-m3-on-surface-dim hover:text-m3-on-surface'"
+                >
+                  4096 MB (推荐战役)
+                </button>
+                <button
+                  type="button"
+                  @click="handleQuickSetMemory(8192)"
+                  class="px-2.5 py-1 rounded-lg border transition text-[11px]"
+                  :class="appConfig.launchConfig.maxMemoryMb === 8192 ? 'bg-m3-primary/20 border-m3-primary text-m3-primary font-bold' : 'bg-m3-surface-high border-m3-outline-variant text-m3-on-surface-dim hover:text-m3-on-surface'"
+                >
+                  8192 MB (超大规模)
+                </button>
+              </div>
             </div>
           </div>
 
@@ -2998,24 +3414,229 @@ onMounted(() => {
           <div>
             <h2 class="text-base font-bold text-m3-on-surface flex items-center gap-2.5">
               <Settings class="w-5 h-5 text-m3-primary" />
-              游戏客户端与环境自检
+              软件与环境设置
             </h2>
-            <p class="text-xs text-m3-on-surface-variant mt-1">检测铁锈战争客户端目录完整性与配置文件状态。</p>
+            <p class="text-xs text-m3-on-surface-variant mt-1">配置软件主题风格、检测铁锈战争客户端目录完整性与运行环境。</p>
           </div>
 
-          <!-- 路径配置卡片 -->
+          <!-- 界面外观与主题 (M3 Theme Selector Card) -->
           <div class="p-5 bg-m3-surface-container border border-m3-outline rounded-2xl space-y-3.5">
-            <div class="flex items-center justify-between">
-              <label class="text-xs font-semibold text-m3-on-surface">游戏安装根目录</label>
+            <div>
+              <label class="text-xs font-semibold text-m3-on-surface">界面外观与主题</label>
+              <p class="text-[11px] text-m3-on-surface-variant mt-0.5">选择软件配色风格。跟随系统将根据操作系统的主题设置实时同步切换。</p>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <!-- 明亮模式卡片 -->
               <button
-                @click="handleChangeDir"
-                class="px-3 py-1.5 bg-m3-surface-high hover:bg-m3-surface-highest text-m3-primary border border-m3-outline rounded-xl text-xs font-medium transition"
+                @click="applyTheme('light')"
+                class="p-3.5 rounded-xl border text-left transition flex flex-col gap-2 relative"
+                :class="themeMode === 'light' ? 'bg-m3-primary/10 border-m3-primary shadow-sm ring-1 ring-m3-primary' : 'bg-m3-surface-high border-m3-outline-variant hover:border-m3-outline'"
               >
-                浏览选择目录
+                <div class="flex items-center justify-between">
+                  <div class="p-2 rounded-lg bg-amber-500/10 text-amber-500">
+                    <Sun class="w-4 h-4" />
+                  </div>
+                  <Check v-if="themeMode === 'light'" class="w-4 h-4 text-m3-primary" />
+                </div>
+                <div>
+                  <div class="text-xs font-bold text-m3-on-surface">明亮模式 (Light)</div>
+                  <div class="text-[11px] text-m3-on-surface-variant mt-0.5">清爽明晰，适合日间采光充足环境</div>
+                </div>
+              </button>
+
+              <!-- 暗黑模式卡片 -->
+              <button
+                @click="applyTheme('dark')"
+                class="p-3.5 rounded-xl border text-left transition flex flex-col gap-2 relative"
+                :class="themeMode === 'dark' ? 'bg-m3-primary/10 border-m3-primary shadow-sm ring-1 ring-m3-primary' : 'bg-m3-surface-high border-m3-outline-variant hover:border-m3-outline'"
+              >
+                <div class="flex items-center justify-between">
+                  <div class="p-2 rounded-lg bg-blue-500/10 text-m3-primary">
+                    <Moon class="w-4 h-4" />
+                  </div>
+                  <Check v-if="themeMode === 'dark'" class="w-4 h-4 text-m3-primary" />
+                </div>
+                <div>
+                  <div class="text-xs font-bold text-m3-on-surface">暗黑模式 (Dark)</div>
+                  <div class="text-[11px] text-m3-on-surface-variant mt-0.5">护眼沉浸，经典 Material 3 深色调</div>
+                </div>
+              </button>
+
+              <!-- 跟随系统卡片 -->
+              <button
+                @click="applyTheme('auto')"
+                class="p-3.5 rounded-xl border text-left transition flex flex-col gap-2 relative"
+                :class="themeMode === 'auto' ? 'bg-m3-primary/10 border-m3-primary shadow-sm ring-1 ring-m3-primary' : 'bg-m3-surface-high border-m3-outline-variant hover:border-m3-outline'"
+              >
+                <div class="flex items-center justify-between">
+                  <div class="p-2 rounded-lg bg-m3-surface-highest text-m3-on-surface">
+                    <Monitor class="w-4 h-4" />
+                  </div>
+                  <Check v-if="themeMode === 'auto'" class="w-4 h-4 text-m3-primary" />
+                </div>
+                <div>
+                  <div class="text-xs font-bold text-m3-on-surface">
+                    跟随系统 (Auto)
+                    <span class="text-[10px] font-normal text-m3-on-surface-dim ml-1 font-mono">
+                      ({{ isSystemDark ? '检测为深色' : '检测为浅色' }})
+                    </span>
+                  </div>
+                  <div class="text-[11px] text-m3-on-surface-variant mt-0.5">根据系统深浅色偏好自动实时切换</div>
+                </div>
               </button>
             </div>
-            <div class="p-3 bg-m3-surface-high border border-m3-outline-variant rounded-xl font-mono text-xs text-m3-on-surface break-all select-text">
-              {{ gameStatus.gameDir || '尚未配置' }}
+          </div>
+
+          <!-- 游戏路径探测与多安装管理卡片 (类似 L4D2 VPK Manager) -->
+          <div class="p-5 bg-m3-surface-container border border-m3-outline rounded-2xl space-y-4">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-m3-outline-variant pb-3">
+              <div>
+                <h3 class="text-xs font-semibold text-m3-on-surface flex items-center gap-2">
+                  <Gamepad2 class="w-4 h-4 text-m3-primary" />
+                  游戏安装路径探测与多版本管理
+                </h3>
+                <p class="text-[11px] text-m3-on-surface-variant mt-0.5">
+                  类似 L4D2 VPK Manager 机制，支持 Steam 注册表、跨盘库分区、运行进程探测与多安装自由切换
+                </p>
+              </div>
+
+              <div class="flex items-center gap-2">
+                <button
+                  @click="runAutoDetectPaths(false)"
+                  :disabled="detectingPaths"
+                  class="px-3 py-1.5 bg-m3-primary hover:bg-m3-primary-hover text-white rounded-xl text-xs font-semibold shadow-sm flex items-center gap-1.5 transition active:scale-95 disabled:opacity-50"
+                  title="全盘重新自动探测"
+                >
+                  <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': detectingPaths }" />
+                  <span>{{ detectingPaths ? '正在检索...' : '全盘重新探测' }}</span>
+                </button>
+                <button
+                  @click="handleBrowseAndAddPath"
+                  class="px-3 py-1.5 bg-m3-surface-high hover:bg-m3-surface-highest text-m3-on-surface rounded-xl text-xs font-medium border border-m3-outline transition active:scale-95 flex items-center gap-1.5"
+                >
+                  <FolderOpen class="w-3.5 h-3.5" />
+                  <span>浏览添加目录</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- 当前生效路径卡片 -->
+            <div class="p-3.5 bg-m3-surface-high border border-m3-outline-variant rounded-xl space-y-2">
+              <div class="flex items-center justify-between text-xs">
+                <div class="flex items-center gap-2">
+                  <span
+                    class="w-2.5 h-2.5 rounded-full"
+                    :class="gameStatus.isValid ? 'bg-m3-success ring-2 ring-m3-success/20' : 'bg-m3-error ring-2 ring-m3-error/20 animate-pulse'"
+                  />
+                  <span class="font-semibold text-m3-on-surface">当前激活生效路径：</span>
+                  <span
+                    v-if="activePathSourceLabel"
+                    class="px-2 py-0.5 rounded text-[10px] bg-m3-primary/10 text-m3-primary font-semibold tracking-wide"
+                  >
+                    {{ activePathSourceLabel }}
+                  </span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button
+                    v-if="gameStatus.gameDir"
+                    @click="handleOpenPathInExplorer(gameStatus.gameDir)"
+                    class="text-xs text-m3-primary hover:underline flex items-center gap-1"
+                  >
+                    <FolderOpen class="w-3.5 h-3.5" />
+                    <span>在资源管理器中打开</span>
+                  </button>
+                  <button
+                    @click="showPathModal = true"
+                    class="text-xs text-m3-primary hover:underline flex items-center gap-1 font-medium"
+                  >
+                    <ArrowRightLeft class="w-3.5 h-3.5" />
+                    <span>管理与切换</span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="font-mono text-xs text-m3-on-surface break-all select-all p-2 rounded-lg bg-m3-surface-container border border-m3-outline/60 flex items-center justify-between gap-2">
+                <span>{{ gameStatus.gameDir || '尚未配置有效游戏目录' }}</span>
+                <button
+                  v-if="gameStatus.gameDir"
+                  @click="handleCopyPath(gameStatus.gameDir)"
+                  class="p-1 text-m3-on-surface-dim hover:text-m3-on-surface transition shrink-0"
+                  title="复制路径"
+                >
+                  <Copy class="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            <!-- 已检测与已知路径快速列表 (若有多个) -->
+            <div v-if="detectedGameDirs.length > 0" class="space-y-2 pt-1">
+              <span class="text-[11px] font-medium text-m3-on-surface-variant block">
+                所有已发现或配置的游戏安装列表 ({{ detectedGameDirs.length }})：
+              </span>
+              <div class="space-y-2">
+                <div
+                  v-for="item in detectedGameDirs"
+                  :key="item.path"
+                  class="p-2.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2 transition"
+                  :class="
+                    item.isActive
+                      ? 'bg-m3-primary/5 border-m3-primary/60'
+                      : 'bg-m3-surface-high border-m3-outline-variant hover:border-m3-outline'
+                  "
+                >
+                  <div class="flex items-center gap-2 min-w-0 flex-1">
+                    <span
+                      class="px-2 py-0.5 rounded text-[10px] font-semibold shrink-0"
+                      :class="
+                        item.source === 'steam'
+                          ? 'bg-blue-500/15 text-blue-400'
+                          : item.source === 'process'
+                          ? 'bg-emerald-500/15 text-emerald-400'
+                          : 'bg-m3-surface-container text-m3-on-surface-variant'
+                      "
+                    >
+                      {{ item.sourceName }}
+                    </span>
+                    <span class="font-mono text-xs text-m3-on-surface truncate" :title="item.path">
+                      {{ item.path }}
+                    </span>
+                    <span v-if="item.isValid" class="text-[10px] font-mono text-m3-on-surface-dim shrink-0">
+                      ({{ item.modCount }} 模组 · {{ item.mapCount }} 地图)
+                    </span>
+                  </div>
+
+                  <div class="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                    <span v-if="item.isActive" class="text-xs font-semibold text-m3-success flex items-center gap-1">
+                      <Check class="w-3.5 h-3.5" />
+                      当前生效
+                    </span>
+                    <button
+                      v-else-if="item.isValid"
+                      @click="handleSwitchGamePath(item.path)"
+                      :disabled="switchingPath"
+                      class="px-2.5 py-1 bg-m3-primary hover:bg-m3-primary-hover text-white rounded-lg text-xs font-medium transition active:scale-95 disabled:opacity-50 flex items-center gap-1"
+                    >
+                      <ArrowRightLeft class="w-3 h-3" />
+                      切换
+                    </button>
+                    <button
+                      @click="handleOpenPathInExplorer(item.path)"
+                      class="p-1 rounded text-m3-on-surface-variant hover:text-m3-on-surface"
+                      title="打开文件夹"
+                    >
+                      <FolderOpen class="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      v-if="!item.isActive"
+                      @click="handleRemoveGamePath(item.path)"
+                      class="p-1 rounded text-m3-on-surface-dim hover:text-m3-error"
+                      title="移除记录"
+                    >
+                      <Trash2 class="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -3488,6 +4109,215 @@ onMounted(() => {
           >
             <DownloadCloud class="w-3.5 h-3.5" :class="{ 'animate-bounce': updating }" />
             <span>{{ updating ? '正在下载升级中...' : '立即下载并自更新' }}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 6. 游戏路径自动探测与选择切换模态框 (类似 L4D2 VPK Manager) -->
+    <div
+      v-if="showPathModal"
+      class="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 sm:p-6"
+    >
+      <div class="bg-m3-surface-container border border-m3-outline rounded-3xl max-w-2xl w-full p-6 shadow-m3-3 space-y-4 animate-in fade-in zoom-in-95 max-h-[88vh] flex flex-col">
+        <!-- 头部 -->
+        <div class="flex items-center justify-between border-b border-m3-outline-variant pb-3 shrink-0">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-2xl bg-m3-primary-container text-m3-primary flex items-center justify-center shrink-0">
+              <Gamepad2 class="w-5 h-5 text-m3-on-primary-container" />
+            </div>
+            <div>
+              <h3 class="text-sm font-bold text-m3-on-surface flex items-center gap-2">
+                游戏路径探测与版本切换
+                <span class="text-[10px] font-normal px-2 py-0.5 rounded-full bg-m3-surface-high text-m3-on-surface-variant border border-m3-outline">
+                  类似 L4D2 VPK Manager
+                </span>
+              </h3>
+              <p class="text-[11px] text-m3-on-surface-variant">全自动检索 Windows 注册表、Steam 库跨盘分区、后台运行进程与磁盘根目录</p>
+            </div>
+          </div>
+          <button
+            @click="showPathModal = false"
+            class="p-1.5 rounded-full hover:bg-m3-surface-high text-m3-on-surface-variant hover:text-m3-on-surface transition"
+          >
+            <X class="w-4 h-4" />
+          </button>
+        </div>
+
+        <!-- 顶部操作条 -->
+        <div class="flex flex-wrap items-center justify-between gap-3 p-3 bg-m3-surface-high border border-m3-outline-variant rounded-2xl shrink-0">
+          <div class="text-xs text-m3-on-surface font-medium">
+            共发现 <span class="font-bold text-m3-primary font-mono">{{ detectedGameDirs.length }}</span> 处安装记录
+            <span class="text-m3-on-surface-variant font-normal">（其中 <span class="font-bold text-m3-success font-mono">{{ validGameDirsCount }}</span> 个有效就绪）</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button
+              @click="runAutoDetectPaths(false)"
+              :disabled="detectingPaths"
+              class="px-3 py-1.5 bg-m3-primary hover:bg-m3-primary-hover text-white rounded-xl text-xs font-semibold shadow-sm flex items-center gap-1.5 transition active:scale-95 disabled:opacity-50"
+              title="重新全盘自动扫描 Steam 库与常见分区"
+            >
+              <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': detectingPaths }" />
+              <span>{{ detectingPaths ? '正在全盘检索...' : '重新全盘探测' }}</span>
+            </button>
+            <button
+              @click="handleBrowseAndAddPath"
+              class="px-3 py-1.5 bg-m3-surface-container hover:bg-m3-surface-highest text-m3-on-surface rounded-xl text-xs font-medium border border-m3-outline transition active:scale-95 flex items-center gap-1.5"
+            >
+              <FolderOpen class="w-3.5 h-3.5 text-m3-primary" />
+              <span>浏览添加目录</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 路径列表 -->
+        <div class="flex-1 overflow-y-auto space-y-2.5 pr-1 min-h-[220px]">
+          <div
+            v-if="detectedGameDirs.length === 0"
+            class="py-12 text-center text-xs text-m3-on-surface-variant space-y-3"
+          >
+            <div class="w-12 h-12 rounded-2xl bg-m3-surface-high flex items-center justify-center mx-auto text-m3-on-surface-variant">
+              <Gamepad2 class="w-6 h-6" />
+            </div>
+            <p class="font-medium text-sm">暂未发现铁锈战争安装路径</p>
+            <p class="text-[11px] text-m3-on-surface-dim max-w-sm mx-auto">
+              您可以点击上方『重新全盘探测』进行深度扫描，或点击『浏览添加目录』手动指定您的游戏安装位置。
+            </p>
+          </div>
+
+          <!-- 路径条目卡片 -->
+          <div
+            v-for="item in detectedGameDirs"
+            :key="item.path"
+            class="p-4 rounded-2xl border transition-all"
+            :class="
+              item.isActive
+                ? 'bg-m3-primary/5 border-m3-primary ring-1 ring-m3-primary shadow-sm'
+                : item.isValid
+                ? 'bg-m3-surface-high border-m3-outline hover:border-m3-primary/50'
+                : 'bg-m3-surface-high/50 border-m3-outline-variant opacity-75'
+            "
+          >
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <!-- 左侧路径信息与元数据 -->
+              <div class="space-y-1.5 min-w-0 flex-1">
+                <div class="flex flex-wrap items-center gap-2">
+                  <!-- 来源标签 -->
+                  <span
+                    class="px-2 py-0.5 rounded-lg text-[10px] font-semibold tracking-wide"
+                    :class="
+                      item.source === 'steam'
+                        ? 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
+                        : item.source === 'process'
+                        ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                        : item.source === 'drive_scan'
+                        ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
+                        : 'bg-purple-500/15 text-purple-400 border border-purple-500/30'
+                    "
+                  >
+                    {{ item.sourceName || item.source }}
+                  </span>
+
+                  <!-- 有效性与版本 -->
+                  <span
+                    v-if="item.isValid"
+                    class="inline-flex items-center gap-1 text-[11px] font-medium text-m3-success"
+                  >
+                    <CheckCircle2 class="w-3.5 h-3.5" />
+                    <span>{{ item.version || '有效版本' }}</span>
+                  </span>
+                  <span
+                    v-else
+                    class="inline-flex items-center gap-1 text-[11px] font-medium text-m3-error"
+                  >
+                    <AlertTriangle class="w-3.5 h-3.5" />
+                    <span>缺少核心文件 (需 game-lib.jar 和 mods/)</span>
+                  </span>
+
+                  <!-- 模组与地图数量 -->
+                  <span
+                    v-if="item.isValid"
+                    class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-m3-surface-container border border-m3-outline text-m3-on-surface-variant"
+                  >
+                    {{ item.modCount }} 模组 · {{ item.mapCount }} 地图
+                  </span>
+                </div>
+
+                <!-- 路径文本与复制按钮 -->
+                <div class="flex items-center gap-1.5 group/path">
+                  <span
+                    class="font-mono text-xs text-m3-on-surface break-all select-all leading-relaxed"
+                    :title="item.path"
+                  >
+                    {{ item.path }}
+                  </span>
+                  <button
+                    @click="handleCopyPath(item.path)"
+                    class="p-1 rounded text-m3-on-surface-dim hover:text-m3-on-surface hover:bg-m3-surface-container transition shrink-0 opacity-60 group-hover/path:opacity-100"
+                    title="复制路径"
+                  >
+                    <Copy class="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              <!-- 右侧操作按钮组 -->
+              <div class="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                <!-- 当前生效标识 -->
+                <div
+                  v-if="item.isActive"
+                  class="px-3 py-1.5 rounded-xl bg-m3-success/15 border border-m3-success/30 text-m3-success text-xs font-semibold flex items-center gap-1.5"
+                >
+                  <Check class="w-3.5 h-3.5 stroke-[3]" />
+                  <span>当前生效</span>
+                </div>
+
+                <!-- 切换至该目录按钮 -->
+                <button
+                  v-else-if="item.isValid"
+                  @click="handleSwitchGamePath(item.path)"
+                  :disabled="switchingPath"
+                  class="px-3.5 py-1.5 bg-m3-primary hover:bg-m3-primary-hover text-white rounded-xl text-xs font-semibold shadow-sm flex items-center gap-1.5 transition active:scale-95 disabled:opacity-50"
+                  title="一键切换生效此路径"
+                >
+                  <ArrowRightLeft class="w-3.5 h-3.5" />
+                  <span>切换到此目录</span>
+                </button>
+
+                <!-- 打开资源管理器 -->
+                <button
+                  @click="handleOpenPathInExplorer(item.path)"
+                  class="p-2 rounded-xl bg-m3-surface-container hover:bg-m3-surface-highest text-m3-on-surface-variant hover:text-m3-on-surface border border-m3-outline transition"
+                  title="在文件资源管理器中打开"
+                >
+                  <FolderOpen class="w-4 h-4" />
+                </button>
+
+                <!-- 移除按钮 (非当前激活项可移除) -->
+                <button
+                  v-if="!item.isActive"
+                  @click="handleRemoveGamePath(item.path)"
+                  class="p-2 rounded-xl bg-m3-surface-container hover:bg-red-500/10 text-m3-on-surface-dim hover:text-m3-error border border-m3-outline transition"
+                  title="从管理列表中移除"
+                >
+                  <Trash2 class="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 底部说明与关闭 -->
+        <div class="flex items-center justify-between pt-3 border-t border-m3-outline-variant shrink-0">
+          <p class="text-[11px] text-m3-on-surface-variant flex items-center gap-1.5">
+            <Sparkles class="w-3.5 h-3.5 text-m3-primary shrink-0" />
+            <span>切换路径后，模组列表、战术地图与预设将全自动即时刷新，无需重启程序。</span>
+          </p>
+          <button
+            @click="showPathModal = false"
+            class="px-5 py-2 bg-m3-surface-high hover:bg-m3-surface-highest text-m3-on-surface rounded-xl text-xs font-medium border border-m3-outline transition"
+          >
+            完成
           </button>
         </div>
       </div>

@@ -13,7 +13,7 @@
   "info": {
     "companyName": "hpf",
     "productName": "Rusted Warfare Mod & Map Manager",
-    "productVersion": "1.0.0",
+    "productVersion": "1.2.0",
     "copyright": "Copyright © 2026",
     "comments": "Rusted Warfare Mod & Map Manager (铁锈战争模组与地图管理器) powered by Go + Wails v2 + Vue 3"
   }

@@ -4,6 +4,8 @@ import {models} from '../models';
 
 export function ActivateMapParentMod(arg1:string):Promise<void>;
 
+export function AddCustomGameDir(arg1:string):Promise<models.GamePathItem>;
+
 export function BatchGenerateThumbnails(arg1:boolean):Promise<number>;
 
 export function BatchToggleMods(arg1:boolean):Promise<void>;
@@ -11,6 +13,8 @@ export function BatchToggleMods(arg1:boolean):Promise<void>;
 export function CheckForUpdates():Promise<models.UpdateInfo>;
 
 export function ComparePresetWithServer(arg1:string,arg2:number):Promise<models.SyncDiff>;
+
+export function DetectGameDirs():Promise<Array<models.GamePathItem>>;
 
 export function DownloadAndApplyUpdate(arg1:string):Promise<void>;
 
@@ -27,6 +31,8 @@ export function GetDynamicPreset():Promise<models.LaunchPreset>;
 export function GetGamePreferences():Promise<models.GamePreferences>;
 
 export function GetGameStatus():Promise<models.GameStatus>;
+
+export function GetKnownGameDirs():Promise<Array<models.GamePathItem>>;
 
 export function GetLanConfig():Promise<models.LanConfig>;
 
@@ -46,7 +52,11 @@ export function LaunchGameSingle():Promise<void>;
 
 export function OpenFolder(arg1:string):Promise<void>;
 
+export function OpenPath(arg1:string):Promise<void>;
+
 export function RefreshDynamicPreset():Promise<models.LaunchPreset>;
+
+export function RemoveKnownGameDir(arg1:string):Promise<Array<models.GamePathItem>>;
 
 export function RequestPushToHost(arg1:string,arg2:number,arg3:string,arg4:string):Promise<void>;
 
@@ -63,6 +73,8 @@ export function ScanMods():Promise<Array<models.ModItem>>;
 export function SelectGameDir():Promise<string>;
 
 export function SetGameDir(arg1:string):Promise<models.GameStatus>;
+
+export function SwitchGameDir(arg1:string):Promise<models.GameStatus>;
 
 export function SwitchLanRole(arg1:string):Promise<void>;
 

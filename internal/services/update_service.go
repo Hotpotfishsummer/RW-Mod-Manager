@@ -170,7 +170,7 @@ func (s *UpdateService) CheckLanUpdate() (*models.UpdateInfo, error) {
 		return nil, nil
 	}
 
-	// 寻找局域网内版本最高的节点 (优先房主)
+	// 寻找局域网内版本最高的节点 (必须严格高于当前版本，若同最高版本优先房主)
 	var bestPeer *models.LanPeer
 	highestVer := models.AppVersion
 
@@ -178,11 +178,12 @@ func (s *UpdateService) CheckLanUpdate() (*models.UpdateInfo, error) {
 		if p.AppVersion == "" {
 			continue
 		}
-		if CompareVersions(p.AppVersion, highestVer) > 0 {
+		cmp := CompareVersions(p.AppVersion, highestVer)
+		if cmp > 0 {
 			highestVer = p.AppVersion
 			pCopy := p
 			bestPeer = &pCopy
-		} else if CompareVersions(p.AppVersion, highestVer) == 0 && p.Role == models.RoleServer {
+		} else if cmp == 0 && highestVer != models.AppVersion && p.Role == models.RoleServer {
 			pCopy := p
 			bestPeer = &pCopy
 		}
@@ -377,6 +378,64 @@ func (s *UpdateService) DownloadAndApplyUpdate(source models.UpdateSource) error
 	_ = os.Remove(newExePath)
 
 	// 开始下载文件流
+	if err := s.DownloadUpdateFile(downloadURL, expectedSize, downloadPath); err != nil {
+		return err
+	}
+
+	// 重命名为 .new 文件
+	if err := os.Rename(downloadPath, newExePath); err != nil {
+		return fmt.Errorf("准备新版本可执行文件失败: %w", err)
+	}
+
+	s.emitProgress(models.UpdateProgress{
+		Status:     "installing",
+		Percentage: 100.0,
+		Message:    "下载完成！正在执行安全热替换并重新拉起应用...",
+	})
+
+	// 执行 Windows 在位热替换
+	// Windows 允许重命名正在运行的 .exe (不可写不可删，但可以 Rename 到同分区路径)
+	_ = os.Remove(oldExePath)
+	renameErr := os.Rename(exePath, oldExePath)
+	if renameErr == nil {
+		if err := os.Rename(newExePath, exePath); err == nil {
+			// 热替换直接成功！启动新进程并退出
+			time.Sleep(500 * time.Millisecond)
+			cmd := exec.Command(exePath)
+			_ = cmd.Start()
+			os.Exit(0)
+			return nil
+		}
+		// 恢复原文件名
+		_ = os.Rename(oldExePath, exePath)
+	}
+
+	// 回退方案：通过后台 detached cmd 脚本延迟 1 秒覆盖并启动
+	batchScript := fmt.Sprintf(
+		`@echo off
+ping 127.0.0.1 -n 2 >nul
+del "%s" >nul 2>&1
+move /y "%s" "%s" >nul 2>&1
+start "" "%s"
+exit
+`,
+		oldExePath, newExePath, exePath, exePath,
+	)
+
+	batPath := filepath.Join(os.TempDir(), "rw_update_restart.bat")
+	if err := os.WriteFile(batPath, []byte(batchScript), 0755); err == nil {
+		cmd := exec.Command("cmd.exe", "/c", batPath)
+		_ = cmd.Start()
+		time.Sleep(300 * time.Millisecond)
+		os.Exit(0)
+		return nil
+	}
+
+	return fmt.Errorf("热替换失败: %v", renameErr)
+}
+
+// DownloadUpdateFile 下载更新文件流到指定路径并实时发送进度
+func (s *UpdateService) DownloadUpdateFile(downloadURL string, expectedSize int64, downloadPath string) error {
 	req, err := http.NewRequestWithContext(context.Background(), "GET", downloadURL, nil)
 	if err != nil {
 		return err
@@ -467,57 +526,7 @@ func (s *UpdateService) DownloadAndApplyUpdate(source models.UpdateSource) error
 		}
 	}
 	out.Close()
-
-	// 重命名为 .new 文件
-	if err := os.Rename(downloadPath, newExePath); err != nil {
-		return fmt.Errorf("准备新版本可执行文件失败: %w", err)
-	}
-
-	s.emitProgress(models.UpdateProgress{
-		Status:     "installing",
-		Percentage: 100.0,
-		Message:    "下载完成！正在执行安全热替换并重新拉起应用...",
-	})
-
-	// 执行 Windows 在位热替换
-	// Windows 允许重命名正在运行的 .exe (不可写不可删，但可以 Rename 到同分区路径)
-	_ = os.Remove(oldExePath)
-	renameErr := os.Rename(exePath, oldExePath)
-	if renameErr == nil {
-		if err := os.Rename(newExePath, exePath); err == nil {
-			// 热替换直接成功！启动新进程并退出
-			time.Sleep(500 * time.Millisecond)
-			cmd := exec.Command(exePath)
-			_ = cmd.Start()
-			os.Exit(0)
-			return nil
-		}
-		// 恢复原文件名
-		_ = os.Rename(oldExePath, exePath)
-	}
-
-	// 回退方案：通过后台 detached cmd 脚本延迟 1 秒覆盖并启动
-	batchScript := fmt.Sprintf(
-		`@echo off
-ping 127.0.0.1 -n 2 >nul
-del "%s" >nul 2>&1
-move /y "%s" "%s" >nul 2>&1
-start "" "%s"
-exit
-`,
-		oldExePath, newExePath, exePath, exePath,
-	)
-
-	batPath := filepath.Join(os.TempDir(), "rw_update_restart.bat")
-	if err := os.WriteFile(batPath, []byte(batchScript), 0755); err == nil {
-		cmd := exec.Command("cmd.exe", "/c", batPath)
-		_ = cmd.Start()
-		time.Sleep(300 * time.Millisecond)
-		os.Exit(0)
-		return nil
-	}
-
-	return fmt.Errorf("热替换失败: %v", renameErr)
+	return nil
 }
 
 func (s *UpdateService) emitProgress(p models.UpdateProgress) {

@@ -2,6 +2,7 @@ import {
   ModItem,
   MapItem,
   GameStatus,
+  GamePathItem,
   AppConfig,
   GamePreferences,
   LanConfig,
@@ -25,6 +26,12 @@ declare global {
           SelectGameDir(): Promise<string>
           SetGameDir(dir: string): Promise<GameStatus>
           GetGameStatus(): Promise<GameStatus>
+          DetectGameDirs(): Promise<GamePathItem[]>
+          GetKnownGameDirs(): Promise<GamePathItem[]>
+          SwitchGameDir(dir: string): Promise<GameStatus>
+          AddCustomGameDir(dir: string): Promise<GamePathItem>
+          RemoveKnownGameDir(dir: string): Promise<GamePathItem[]>
+          OpenPath(path: string): Promise<void>
           ScanMods(): Promise<ModItem[]>
           ToggleMod(fileName: string, enabled: boolean): Promise<void>
           BatchToggleMods(enableAll: boolean): Promise<void>
@@ -138,6 +145,77 @@ export function useApi() {
       totalMaps: 306,
       activeMaps: 163
     }
+  }
+
+  const detectGameDirs = async (): Promise<GamePathItem[]> => {
+    if (isWails()) return window.go!.main.App.DetectGameDirs()
+    return [
+      {
+        path: 'E:\\Rusted Warfare\\Rusted Warfare',
+        source: 'steam',
+        sourceName: 'Steam 库 (E:)',
+        isValid: true,
+        version: 'v1.15 (Build 176)',
+        modCount: 18,
+        mapCount: 12,
+        isActive: true
+      },
+      {
+        path: 'D:\\Games\\Rusted Warfare',
+        source: 'drive_scan',
+        sourceName: '磁盘扫描 (D:)',
+        isValid: true,
+        version: 'v1.14 (Build 174)',
+        modCount: 5,
+        mapCount: 2,
+        isActive: false
+      }
+    ]
+  }
+
+  const getKnownGameDirs = async (): Promise<GamePathItem[]> => {
+    if (isWails()) return window.go!.main.App.GetKnownGameDirs()
+    return [
+      {
+        path: 'E:\\Rusted Warfare\\Rusted Warfare',
+        source: 'history',
+        sourceName: '当前生效路径',
+        isValid: true,
+        version: 'v1.15 (Build 176)',
+        modCount: 18,
+        mapCount: 12,
+        isActive: true
+      }
+    ]
+  }
+
+  const switchGameDir = async (dir: string): Promise<GameStatus> => {
+    if (isWails()) return window.go!.main.App.SwitchGameDir(dir)
+    return setGameDir(dir)
+  }
+
+  const addCustomGameDir = async (dir: string): Promise<GamePathItem> => {
+    if (isWails()) return window.go!.main.App.AddCustomGameDir(dir)
+    return {
+      path: dir,
+      source: 'manual',
+      sourceName: '自定义添加',
+      isValid: true,
+      version: 'v1.15',
+      modCount: 10,
+      mapCount: 4,
+      isActive: true
+    }
+  }
+
+  const removeKnownGameDir = async (dir: string): Promise<GamePathItem[]> => {
+    if (isWails()) return window.go!.main.App.RemoveKnownGameDir(dir)
+    return []
+  }
+
+  const openPath = async (path: string): Promise<void> => {
+    if (isWails()) return window.go!.main.App.OpenPath(path)
+    console.log('Mock openPath:', path)
   }
 
   const scanMods = async (): Promise<ModItem[]> => {
@@ -416,8 +494,8 @@ export function useApi() {
     if (isWails()) return window.go!.main.App.CheckForUpdates()
     return {
       hasUpdate: false,
-      currentVersion: '1.0.0',
-      latestVersion: '1.0.0',
+      currentVersion: '1.2.0',
+      latestVersion: '1.2.0',
       source: 'lan',
       providerName: '本地测试',
       downloadUrl: '',
@@ -425,9 +503,9 @@ export function useApi() {
       fileSize: 0,
       publishedAt: '刚刚',
       lanAvailable: false,
-      lanVersion: '1.0.0',
+      lanVersion: '1.2.0',
       githubAvailable: false,
-      githubVersion: '1.0.0'
+      githubVersion: '1.2.0'
     }
   }
 
@@ -438,7 +516,7 @@ export function useApi() {
 
   const getCurrentVersion = async (): Promise<string> => {
     if (isWails()) return window.go!.main.App.GetCurrentVersion()
-    return '1.0.0'
+    return '1.2.0'
   }
 
   return {
@@ -447,6 +525,12 @@ export function useApi() {
     selectGameDir,
     setGameDir,
     getGameStatus,
+    detectGameDirs,
+    getKnownGameDirs,
+    switchGameDir,
+    addCustomGameDir,
+    removeKnownGameDir,
+    openPath,
     scanMods,
     toggleMod,
     batchToggleMods,

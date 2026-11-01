@@ -2,17 +2,106 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ==========================================================================
+   Material Design 3 Theme Color Tokens (Light & Dark)
+   ========================================================================== */
+
+/* Light Mode (默认 :root 浅色明亮风格) */
 :root {
-  --m3-surface: #0f1319;
-  --m3-surface-low: #131821;
-  --m3-surface-container: #18202b;
-  --m3-surface-high: #1e2837;
-  --m3-surface-highest: #253245;
-  --m3-outline: #2e3d52;
-  --m3-outline-variant: #1f2a38;
-  --m3-primary: #4d88ff;
-  --m3-on-surface: #f1f5f9;
-  --m3-on-surface-variant: #94a3b8;
+  --m3-surface: 248 250 252;             /* #f8fafc Slate-50 */
+  --m3-surface-dim: 226 232 240;         /* #e2e8f0 Slate-200 */
+  --m3-surface-bright: 255 255 255;      /* #ffffff */
+  --m3-surface-low: 241 245 249;         /* #f1f5f9 Slate-100 */
+  --m3-surface-container: 255 255 255;   /* #ffffff */
+  --m3-surface-high: 241 245 249;        /* #f1f5f9 */
+  --m3-surface-highest: 226 232 240;     /* #e2e8f0 */
+
+  --m3-outline: 203 213 225;             /* #cbd5e1 Slate-300 */
+  --m3-outline-variant: 226 232 240;     /* #e2e8f0 Slate-200 */
+
+  --m3-on-surface: 15 23 42;             /* #0f172a Slate-900 */
+  --m3-on-surface-variant: 71 85 105;    /* #475569 Slate-600 */
+  --m3-on-surface-dim: 148 163 184;      /* #94a3b8 Slate-400 */
+
+  --m3-primary: 37 99 235;               /* #2563eb Blue-600 */
+  --m3-primary-hover: 29 78 216;         /* #1d4ed8 Blue-700 */
+  --m3-on-primary: 255 255 255;
+  --m3-primary-container: 219 234 254;   /* #dbeafe Blue-100 */
+  --m3-on-primary-container: 30 64 175;  /* #1e40af Blue-800 */
+
+  --m3-secondary: 100 116 139;           /* #64748b Slate-500 */
+  --m3-on-secondary: 255 255 255;
+  --m3-secondary-container: 226 232 240; /* #e2e8f0 Slate-200 */
+  --m3-on-secondary-container: 30 41 59; /* #1e293b Slate-800 */
+
+  --m3-tertiary: 2 132 199;              /* #0284c7 Sky-600 */
+  --m3-tertiary-container: 224 242 254;  /* #e0f2fe Sky-100 */
+  --m3-on-tertiary-container: 3 105 161; /* #0369a1 Sky-700 */
+
+  --m3-success: 22 163 74;               /* #16a34a Green-600 */
+  --m3-success-container: 220 252 231;   /* #dcfce7 Green-100 */
+  --m3-on-success-container: 21 128 61;  /* #15803d Green-700 */
+
+  --m3-warning: 217 119 6;               /* #d97706 Amber-600 */
+  --m3-warning-container: 254 243 199;   /* #fef3c7 Amber-100 */
+  --m3-on-warning-container: 180 83 9;   /* #b45309 Amber-700 */
+
+  --m3-error: 220 38 38;                 /* #dc2626 Red-600 */
+  --m3-error-container: 254 226 226;     /* #fee2e2 Red-100 */
+  --m3-on-error-container: 185 28 28;    /* #b91c1c Red-700 */
+
+  --m3-shadow-1: 0 1px 3px 0 rgba(0, 0, 0, 0.08), 0 1px 2px -1px rgba(0, 0, 0, 0.08);
+  --m3-shadow-2: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.08);
+  --m3-shadow-3: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+}
+
+/* Dark Mode (html.dark 深色暗黑风格) */
+html.dark {
+  --m3-surface: 15 19 25;                /* #0f1319 Deep Navy */
+  --m3-surface-dim: 10 13 18;            /* #0a0d12 */
+  --m3-surface-bright: 35 43 54;         /* #232b36 */
+  --m3-surface-low: 19 24 33;            /* #131821 */
+  --m3-surface-container: 24 32 43;      /* #18202b */
+  --m3-surface-high: 30 40 55;           /* #1e2837 */
+  --m3-surface-highest: 37 50 69;        /* #253245 */
+
+  --m3-outline: 46 61 82;                /* #2e3d52 */
+  --m3-outline-variant: 31 42 56;        /* #1f2a38 */
+
+  --m3-on-surface: 241 245 249;          /* #f1f5f9 */
+  --m3-on-surface-variant: 148 163 184;  /* #94a3b8 */
+  --m3-on-surface-dim: 100 116 139;      /* #64748b */
+
+  --m3-primary: 77 136 255;              /* #4d88ff Tech Blue */
+  --m3-primary-hover: 99 152 255;        /* #6398ff */
+  --m3-on-primary: 255 255 255;
+  --m3-primary-container: 27 50 82;      /* #1b3252 */
+  --m3-on-primary-container: 211 228 255;/* #d3e4ff */
+
+  --m3-secondary: 144 162 184;           /* #90a2b8 */
+  --m3-on-secondary: 17 26 36;           /* #111a24 */
+  --m3-secondary-container: 32 43 58;    /* #202b3a */
+  --m3-on-secondary-container: 213 225 238;/* #d5e1ee */
+
+  --m3-tertiary: 91 192 222;             /* #5bc0de */
+  --m3-tertiary-container: 22 49 64;     /* #163140 */
+  --m3-on-tertiary-container: 208 240 253;/* #d0f0fd */
+
+  --m3-success: 52 211 153;              /* #34d399 */
+  --m3-success-container: 16 46 33;      /* #102e21 */
+  --m3-on-success-container: 167 243 208;/* #a7f3d0 */
+
+  --m3-warning: 251 191 36;              /* #fbbf24 */
+  --m3-warning-container: 48 38 14;      /* #30260e */
+  --m3-on-warning-container: 254 240 138;/* #fef08a */
+
+  --m3-error: 248 113 113;               /* #f87171 */
+  --m3-error-container: 56 23 27;        /* #38171b */
+  --m3-on-error-container: 254 202 202;  /* #fecaca */
+
+  --m3-shadow-1: 0 1px 3px 1px rgba(0, 0, 0, 0.25), 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+  --m3-shadow-2: 0 2px 6px 2px rgba(0, 0, 0, 0.25), 0 1px 2px 0 rgba(0, 0, 0, 0.35);
+  --m3-shadow-3: 0 4px 12px 3px rgba(0, 0, 0, 0.3), 0 2px 4px 0 rgba(0, 0, 0, 0.4);
 }
 
 html, body {
@@ -20,14 +109,15 @@ html, body {
   height: 100%;
   margin: 0;
   padding: 0;
-  background-color: #0f1319;
-  color: #f1f5f9;
+  background-color: rgb(var(--m3-surface));
+  color: rgb(var(--m3-on-surface));
   font-family: "Google Sans", "Segoe UI", Roboto, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   overflow: hidden;
   user-select: none;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 #app {
@@ -35,7 +125,7 @@ html, body {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background-color: #0f1319;
+  background-color: rgb(var(--m3-surface));
 }
 
 /* Material 3 Minimal Scrollbar */
@@ -49,25 +139,25 @@ html, body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #253245;
+  background: rgb(var(--m3-outline) / 0.6);
   border-radius: 9999px;
   transition: background 0.2s ease;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #36465d;
+  background: rgb(var(--m3-outline));
 }
 
 ::selection {
-  background: #1b3252;
-  color: #d3e4ff;
+  background: rgb(var(--m3-primary-container));
+  color: rgb(var(--m3-on-primary-container));
 }
 
 /* Material 3 Range Slider Styling */
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
-  background: #253245;
+  background: rgb(var(--m3-surface-highest));
   height: 6px;
   border-radius: 9999px;
   outline: none;
@@ -79,7 +169,7 @@ input[type="range"]::-webkit-slider-thumb {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #4d88ff;
+  background: rgb(var(--m3-primary));
   cursor: pointer;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
   transition: transform 0.15s ease, background-color 0.15s ease;
@@ -87,10 +177,10 @@ input[type="range"]::-webkit-slider-thumb {
 
 input[type="range"]::-webkit-slider-thumb:hover {
   transform: scale(1.15);
-  background: #6398ff;
+  background: rgb(var(--m3-primary-hover));
 }
 
 input[type="range"]::-webkit-slider-thumb:active {
   transform: scale(1.25);
-  box-shadow: 0 0 0 6px rgba(77, 136, 255, 0.25);
+  box-shadow: 0 0 0 6px rgb(var(--m3-primary) / 0.25);
 }

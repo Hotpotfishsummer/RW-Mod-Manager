@@ -6,6 +6,10 @@ export function ActivateMapParentMod(arg1) {
   return window['go']['main']['App']['ActivateMapParentMod'](arg1);
 }
 
+export function AddCustomGameDir(arg1) {
+  return window['go']['main']['App']['AddCustomGameDir'](arg1);
+}
+
 export function BatchGenerateThumbnails(arg1) {
   return window['go']['main']['App']['BatchGenerateThumbnails'](arg1);
 }
@@ -20,6 +24,10 @@ export function CheckForUpdates() {
 
 export function ComparePresetWithServer(arg1, arg2) {
   return window['go']['main']['App']['ComparePresetWithServer'](arg1, arg2);
+}
+
+export function DetectGameDirs() {
+  return window['go']['main']['App']['DetectGameDirs']();
 }
 
 export function DownloadAndApplyUpdate(arg1) {
@@ -52,6 +60,10 @@ export function GetGamePreferences() {
 
 export function GetGameStatus() {
   return window['go']['main']['App']['GetGameStatus']();
+}
+
+export function GetKnownGameDirs() {
+  return window['go']['main']['App']['GetKnownGameDirs']();
 }
 
 export function GetLanConfig() {
@@ -90,8 +102,16 @@ export function OpenFolder(arg1) {
   return window['go']['main']['App']['OpenFolder'](arg1);
 }
 
+export function OpenPath(arg1) {
+  return window['go']['main']['App']['OpenPath'](arg1);
+}
+
 export function RefreshDynamicPreset() {
   return window['go']['main']['App']['RefreshDynamicPreset']();
+}
+
+export function RemoveKnownGameDir(arg1) {
+  return window['go']['main']['App']['RemoveKnownGameDir'](arg1);
 }
 
 export function RequestPushToHost(arg1, arg2, arg3, arg4) {
@@ -124,6 +144,10 @@ export function SelectGameDir() {
 
 export function SetGameDir(arg1) {
   return window['go']['main']['App']['SetGameDir'](arg1);
+}
+
+export function SwitchGameDir(arg1) {
+  return window['go']['main']['App']['SwitchGameDir'](arg1);
 }
 
 export function SwitchLanRole(arg1) {

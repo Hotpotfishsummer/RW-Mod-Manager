@@ -71,8 +71,21 @@ export interface GamePreferences {
   uiRenderScale: number
 }
 
+export interface GamePathItem {
+  path: string
+  source: 'steam' | 'process' | 'drive_scan' | 'history' | 'manual'
+  sourceName: string
+  isValid: boolean
+  version: string
+  modCount: number
+  mapCount: number
+  isActive: boolean
+  lastUsed?: number
+}
+
 export interface AppConfig {
   gameDir: string
+  knownGameDirs?: string[]
   launchConfig: LaunchConfig
   gamePreferences: GamePreferences
   lanConfig: LanConfig

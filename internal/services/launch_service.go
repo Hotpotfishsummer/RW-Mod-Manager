@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -23,14 +24,48 @@ func (s *LaunchService) LaunchGame(gameDir string, cfg models.LaunchConfig) erro
 	switch cfg.ExecutableType {
 	case "java":
 		// 使用内置 JVM 启动模式 (可自定义 -Xmx 内存)
-		javaExe := filepath.Join(gameDir, "jvm64", "bin", "java.exe")
+		// 1. 优先使用 javaw.exe，避免 Windows 弹出额外黑框控制台
+		javaExe := filepath.Join(gameDir, "jvm64", "bin", "javaw.exe")
+		if _, err := os.Stat(javaExe); os.IsNotExist(err) {
+			javaExe = filepath.Join(gameDir, "jvm64", "bin", "java.exe")
+		}
+		if _, err := os.Stat(javaExe); os.IsNotExist(err) {
+			// 回退到 32 位 jvm
+			javaExe = filepath.Join(gameDir, "jvm", "bin", "javaw.exe")
+			if _, err2 := os.Stat(javaExe); os.IsNotExist(err2) {
+				javaExe = filepath.Join(gameDir, "jvm", "bin", "java.exe")
+			}
+		}
+
 		var args []string
 		memMb := 4096
 		if cfg.MaxMemoryMB > 0 {
 			memMb = cfg.MaxMemoryMB
 		}
-		args = append(args, fmt.Sprintf("-Xmx%dM", memMb))
-		args = append(args, "-Dfile.encoding=UTF-8", "-Djava.library.path=.", "-cp", "game-lib.jar;libs/*", "com.corrodinggames.rts.java.Main")
+
+		// 2. 初始堆与最大堆调优：设置初始堆 -Xms，避免大型模组初始化时频繁扩容触发 STW 卡顿
+		initMemMb := memMb / 4
+		if initMemMb < 512 {
+			initMemMb = 512
+		} else if initMemMb > 2048 {
+			initMemMb = 2048
+		}
+
+		args = append(args,
+			fmt.Sprintf("-Xms%dM", initMemMb),
+			fmt.Sprintf("-Xmx%dM", memMb),
+			"-XX:+UseG1GC",
+			"-XX:MaxGCPauseMillis=100",
+			"-Dfile.encoding=UTF-8",
+			"-Djava.library.path=.",
+			"-cp", "game-lib.jar;libs/*",
+			"com.corrodinggames.rts.java.Main",
+		)
+
+		// 3. 自动追加 -log lastrun.log，保证游戏内日志和崩溃堆栈正常输出
+		if !strings.Contains(cfg.ExtraArgs, "-log") {
+			args = append(args, "-log", "lastrun.log")
+		}
 
 		if cfg.Fullscreen {
 			args = append(args, "-fullscreen")

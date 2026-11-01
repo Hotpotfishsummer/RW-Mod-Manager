@@ -149,8 +149,8 @@ func (s *MapService) parseMapPack(path string, d os.DirEntry, locType string, ac
 
 	// 先建立缩略图索引
 	for _, f := range r.File {
-		nameLower := strings.ToLower(f.Name)
-		if strings.HasSuffix(nameLower, "_map.png") {
+		nameLower := strings.TrimSuffix(strings.ToLower(filepath.ToSlash(f.Name)), "/")
+		if strings.HasSuffix(nameLower, "_map.png") && !f.FileInfo().IsDir() && f.UncompressedSize64 > 0 {
 			base := strings.TrimSuffix(filepath.Base(nameLower), "_map.png")
 			previewMap[base] = f
 		}

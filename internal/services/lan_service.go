@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -52,11 +53,12 @@ type LanService struct {
 	hasServerConflict   bool
 	conflictingServers  []models.LanPeer
 
-	wailsCtx  context.Context
-	ctx       context.Context
-	cancel    context.CancelFunc
-	udpConn   *net.UDPConn
-	httpSrv   *http.Server
+	wailsCtx   context.Context
+	ctx        context.Context
+	cancel     context.CancelFunc
+	udpConn    *net.UDPConn
+	packetConn net.PacketConn
+	httpSrv    *http.Server
 	actualPort int
 }
 
@@ -83,7 +85,7 @@ func (s *LanService) SetWailsContext(ctx context.Context) {
 func (s *LanService) Start() {
 	s.RefreshDynamicPreset()
 
-	go s.startHttpServer()
+	s.startHttpServer()
 	go s.startUdpListener()
 	go s.startHeartbeatBroadcaster()
 	go s.startPresetWatcher()
@@ -96,9 +98,16 @@ func (s *LanService) Stop() {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	s.mu.Lock()
+	if s.packetConn != nil {
+		_ = s.packetConn.Close()
+		s.packetConn = nil
+	}
 	if s.udpConn != nil {
 		_ = s.udpConn.Close()
+		s.udpConn = nil
 	}
+	s.mu.Unlock()
 	if s.httpSrv != nil {
 		ctx, c := context.WithTimeout(context.Background(), 2*time.Second)
 		defer c()
@@ -467,18 +476,18 @@ func (s *LanService) SyncWithServer(serverIP string, serverPort int) error {
 
 	// 1. 下载缺失的模组
 	for _, m := range diff.MissingMods {
-		fileURL := fmt.Sprintf("http://%s:%d/api/lan/file?type=mod&name=%s", serverIP, serverPort, m.FileName)
+		fileURL := fmt.Sprintf("http://%s:%d/api/lan/file?type=mod&name=%s", serverIP, serverPort, url.QueryEscape(m.FileName))
 		targetPath := filepath.Join(unitsDir, m.FileName)
-		if err := s.downloadFile(fileURL, targetPath); err != nil {
+		if err := s.downloadFile(fileURL, targetPath, m.IsDir); err != nil {
 			return fmt.Errorf("下载模组 %s 失败: %w", m.FileName, err)
 		}
 	}
 
 	// 2. 下载缺失的地图
 	for _, mp := range diff.MissingMaps {
-		fileURL := fmt.Sprintf("http://%s:%d/api/lan/file?type=map&name=%s", serverIP, serverPort, mp.FileName)
+		fileURL := fmt.Sprintf("http://%s:%d/api/lan/file?type=map&name=%s", serverIP, serverPort, url.QueryEscape(mp.FileName))
 		targetPath := filepath.Join(mapsDir, mp.FileName)
-		if err := s.downloadFile(fileURL, targetPath); err != nil {
+		if err := s.downloadFile(fileURL, targetPath, false); err != nil {
 			return fmt.Errorf("下载地图 %s 失败: %w", mp.FileName, err)
 		}
 	}
@@ -709,7 +718,17 @@ func (s *LanService) startUdpListener() {
 		fmt.Printf("[LAN] 监听 UDP 广播端口 %d 失败: %v\n", listenPort, err)
 		return
 	}
-	defer packetConn.Close()
+	s.mu.Lock()
+	s.packetConn = packetConn
+	s.mu.Unlock()
+	defer func() {
+		_ = packetConn.Close()
+		s.mu.Lock()
+		if s.packetConn == packetConn {
+			s.packetConn = nil
+		}
+		s.mu.Unlock()
+	}()
 
 	buf := make([]byte, 4096)
 	for {
@@ -796,6 +815,7 @@ func (s *LanService) broadcastBeacon() {
 	if s.currentPreset != nil {
 		presetHash = s.currentPreset.VersionHash
 	}
+	port := s.actualPort
 	s.mu.RUnlock()
 
 	beacon := DiscoveryBeacon{
@@ -803,7 +823,7 @@ func (s *LanService) broadcastBeacon() {
 		InstanceID:    cfg.InstanceID,
 		DeviceName:    cfg.DeviceName,
 		Role:          cfg.Role,
-		HttpPort:      s.actualPort,
+		HttpPort:      port,
 		Subnet:        cfg.SelectedSubnet,
 		PresetVersion: presetHash,
 		AppVersion:    models.AppVersion,
@@ -842,7 +862,7 @@ func (s *LanService) broadcastGoodbye() {
 	data, _ := json.Marshal(beacon)
 
 	targets := s.resolveBroadcastTargets()
-	conn, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: net.IPv4bcast, Port: cfg.BroadcastPort})
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 	if err == nil {
 		defer conn.Close()
 		for _, target := range targets {
@@ -1187,15 +1207,19 @@ func (s *LanService) startHttpServer() {
 	for p := basePort; p < basePort+20; p++ {
 		listener, err := net.Listen("tcp", fmt.Sprintf(":%d", p))
 		if err == nil {
+			s.mu.Lock()
 			s.actualPort = p
 			s.httpSrv = &http.Server{Handler: mux}
-			_ = s.httpSrv.Serve(listener)
+			s.mu.Unlock()
+			go func() {
+				_ = s.httpSrv.Serve(listener)
+			}()
 			return
 		}
 	}
 }
 
-func (s *LanService) downloadFile(fileURL, targetPath string) error {
+func (s *LanService) downloadFile(fileURL, targetPath string, isDirMod bool) error {
 	tmpPath := targetPath + ".tmp"
 	resp, err := http.Get(fileURL)
 	if err != nil {
@@ -1219,12 +1243,110 @@ func (s *LanService) downloadFile(fileURL, targetPath string) error {
 		return err
 	}
 
-	_ = os.Remove(targetPath)
+	if isDirMod {
+		defer os.Remove(tmpPath)
+		return extractZipToDir(tmpPath, targetPath)
+	}
+
+	_ = os.RemoveAll(targetPath)
 	return os.Rename(tmpPath, targetPath)
 }
 
+func extractZipToDir(zipPath, destDir string) error {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	_ = os.RemoveAll(destDir)
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return err
+	}
+
+	for _, f := range r.File {
+		cleanPath := filepath.Clean(f.Name)
+		if strings.HasPrefix(cleanPath, "..") || strings.Contains(cleanPath, ":") {
+			continue
+		}
+		target := filepath.Join(destDir, cleanPath)
+		if f.FileInfo().IsDir() {
+			_ = os.MkdirAll(target, 0755)
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			return err
+		}
+		outFile, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+		if err != nil {
+			return err
+		}
+		rc, err := f.Open()
+		if err != nil {
+			outFile.Close()
+			return err
+		}
+		_, err = io.Copy(outFile, rc)
+		outFile.Close()
+		rc.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *LanService) uploadFileToServer(serverIP string, serverPort int, reqID, itemType, fileName, localFilePath string) error {
-	file, err := os.Open(localFilePath)
+	fi, err := os.Stat(localFilePath)
+	if err != nil {
+		return err
+	}
+
+	uploadPath := localFilePath
+	isTemp := false
+	if fi.IsDir() {
+		// 若为解压文件夹模组，先将其打包为临时 zip/rwmod 文件再上传
+		tmpFile, err := os.CreateTemp("", "rw_push_*.rwmod")
+		if err != nil {
+			return fmt.Errorf("创建临时压缩文件失败: %w", err)
+		}
+		tmpPath := tmpFile.Name()
+		defer func() {
+			if isTemp {
+				_ = os.Remove(tmpPath)
+			}
+		}()
+		zw := zip.NewWriter(tmpFile)
+		walkErr := filepath.Walk(localFilePath, func(p string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return nil
+			}
+			rel, _ := filepath.Rel(localFilePath, p)
+			wFile, err := zw.Create(rel)
+			if err != nil {
+				return err
+			}
+			f, err := os.Open(p)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			_, _ = io.Copy(wFile, f)
+			return nil
+		})
+		_ = zw.Close()
+		_ = tmpFile.Close()
+		if walkErr != nil {
+			return fmt.Errorf("打包目录失败: %w", walkErr)
+		}
+		uploadPath = tmpPath
+		isTemp = true
+		if !strings.HasSuffix(strings.ToLower(fileName), ".rwmod") {
+			fileName = fileName + ".rwmod"
+		}
+	}
+
+	file, err := os.Open(uploadPath)
 	if err != nil {
 		return err
 	}

@@ -6,6 +6,7 @@ import (
 	_ "image/png"
 	"os"
 	"path/filepath"
+	"rw_mod_manager/internal/models"
 	"strings"
 	"testing"
 )
@@ -80,3 +81,39 @@ func TestMapRendererNative(t *testing.T) {
 			img2.Bounds().Dx(), img2.Bounds().Dy(), len(png2))
 	}
 }
+
+func TestFindMissingPreviews(t *testing.T) {
+	gameDir := `E:\Rusted Warfare\Rusted Warfare`
+	prefSvc := NewPrefService()
+	mapSvc := NewMapService(prefSvc)
+	maps, err := mapSvc.ScanMaps(gameDir)
+	if err != nil {
+		t.Fatalf("ScanMaps error: %v", err)
+	}
+
+	var missing []models.MapItem
+	for _, m := range maps {
+		if !m.HasPreview {
+			missing = append(missing, m)
+			t.Logf("Missing preview: ID=%s, FileName=%s, FilePath=%s, LocType=%s, PackName=%s, ParentMod=%s",
+				m.ID, m.FileName, m.FilePath, m.LocationType, m.PackName, m.ParentModFile)
+		}
+	}
+	t.Logf("Total missing previews: %d out of %d", len(missing), len(maps))
+}
+
+func TestBatchPatchZSY(t *testing.T) {
+	gameDir := `E:\Rusted Warfare\Rusted Warfare`
+	packPath := filepath.Join(gameDir, "mods", "units", "ZSY工作室隔离区V3.9.35.rwmod")
+	if _, err := os.Stat(packPath); err != nil {
+		t.Skip("ZSY mod not found")
+	}
+	renderer := NewMapRenderer(gameDir)
+	count, err := renderer.BatchPatchPacks([]string{packPath}, false)
+	t.Logf("BatchPatchPacks result: count=%d, err=%v", count, err)
+	if err != nil {
+		t.Fatalf("BatchPatchPacks failed: %v", err)
+	}
+}
+
+

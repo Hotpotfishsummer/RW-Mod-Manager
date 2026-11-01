@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-v1.0.0-blue.svg?style=flat-square)
+![Version](https://img.shields.io/badge/version-v1.2.0-blue.svg?style=flat-square)
 ![Go](https://img.shields.io/badge/Go-1.22+-00ADD8.svg?style=flat-square&logo=go)
 ![Wails](https://img.shields.io/badge/Wails-v2-DF1A55.svg?style=flat-square&logo=wails)
 ![Vue 3](https://img.shields.io/badge/Vue-3.4+-4FC08D.svg?style=flat-square&logo=vue.js)
@@ -38,10 +38,21 @@
 - **GitHub Releases 官方通道**：连接公网时自动查询官方 Releases 接口，获取最新 Tag、更新说明与 Release 资产，作为全球云端分发通道。
 - **Windows 在位热替换自更新 (Zero-Downtime Hot Replacement)**：利用 Windows 同分区原子重命名技巧，实现运行态平滑替换并自动重启拉起新版本，启动后自动清理解压备份，全程一键静默完成。
 
-### 4. 🎛️ preferences.ini 原生直写与电竞高刷调优 (Engine Tuning)
-- 深度融合官方引擎底层参数，可视化配置 JVM 内存上限、60Hz / 120Hz / 144Hz / 240Hz+ 电竞高刷新率支持、垂直同步、FPS 显示与队伍造兵上限。
+### 4. 🎛️ preferences.ini 原生直写与电竞高刷/JVM极致调优 (Engine Tuning)
+- **电竞高刷与渲染管线**：深度融合官方引擎底层参数，直写 `preferences.ini`，提供 60Hz / 120Hz / 144Hz / 240Hz+ 电竞高刷新率支持、垂直同步、FPS 显示、平滑帧时间差与队伍造兵上限。
+- **内置 64位 JVM 深度调优**：突破官方原生 EXE 启动器内部写死 1000MB 的硬编码壁垒，采用【内置 64位 JVM 模式】自由配置 1024MB ~ 8192MB 堆内存上限（-Xmx），自动预分配初始堆（-Xms）并启用低延迟 G1GC 垃圾回收器，彻底消除重度模组轰炸导致 Java 虚拟机内存溢出 (OOM) 崩溃。
 
-### 5. 🎨 现代 Material Design 3 暗色美学设计
+### 5. 🔍 智能游戏路径全自动探测与多安装热切换 (Auto Path Detection & Switcher)
+- **类似 L4D2 VPK Manager 的全域自动化探测**：
+  - **Steam 注册表深度定位**：自动查询 Windows 注册表（支持原生 64位 与 WOW6432Node）中的 Steam 核心安装根路径以及铁锈战争专属 AppID（`647960`）官方卸载项。
+  - **Steam 跨盘库全量解析**：递归解析 `libraryfolders.vdf`，穿透遍历各个物理磁盘与扩展分区的 SteamLibrary 库，精准读取 `appmanifest_647960.acf` 进行资产特征验证。
+  - **运行中游戏进程捕捉**：调用 Windows 核心 API（Toolhelp32 快照）秒级捕捉运行态中的 `Rusted Warfare.exe` / `Rusted Warfare - 64.exe` 实例，直达当前启动进程的根目录。
+  - **全逻辑盘符扫描与自检**：遍历全系统已挂载逻辑盘（C: ~ Z:）与用户常用工作目录，严格校验 `game-lib.jar`、`mods/` 等核心特征，杜绝无效误报。
+- **多版本自由切换与持久化管理**：
+  - 顶栏状态胶囊（Chip）结合快速切换弹窗，支持分类展示来源标签（Steam 官方、运行中进程、各盘符扫描、自定义添加）、游戏版本构建号、模组与地图就绪数量。
+  - 一键秒级切换生效客户端，模组列表、战术出生点地图、联机动态预设全自动即时热重载，无需重启应用程序。
+
+### 6. 🎨 现代 Material Design 3 暗色美学设计
 - 采用 M3 设计语言，支持状态胶囊（Chip）、精致暗调表面海拔高度、骨架屏加载反馈与全局无感 Toast 提示。
 
 ---
@@ -60,6 +71,8 @@ rw-mod-manager/
 │   │   └── update.go               # 更新器模型、版本常量与进度汇报结构
 │   └── services/                   # 底层业务服务实现
 │       ├── game_service.go         # 游戏安装路径侦测、健全性检查与全局持久化
+│       ├── detector_windows.go     # Windows 注册表/Steam库/进程/磁盘全盘扫描探测器
+│       ├── detector_other.go       # 跨平台探测抽象兜底实现
 │       ├── pref_service.go         # preferences.ini 解析器与状态双向同步器
 │       ├── mod_service.go          # 模组扫描、元数据解析与启用/禁用控制
 │       ├── map_service.go          # 地图全量扫描与缩略图管理中心
@@ -99,10 +112,14 @@ wails dev
 
 ### 生产环境单文件编译
 ```bash
-# 清理并构建 Windows x64 独立可执行程序
+# 执行生产构建脚本 (包含 Wails 清理编译并自动同步分发至常用目录 E:\Rusted Warfare)
+powershell -ExecutionPolicy Bypass -File scripts\build.ps1
+
+# 或手动通过 Wails CLI 编译：
 wails build -clean
 
 # 产物生成位置：build/bin/RW-Mod-Manager.exe
+# 自动分发位置：E:\Rusted Warfare\RW-Mod-Manager.exe (若存在该目录)
 ```
 
 ### 运行自动化单元测试

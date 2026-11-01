@@ -84,6 +84,7 @@ export namespace models {
 	}
 	export class AppConfig {
 	    gameDir: string;
+	    knownGameDirs?: string[];
 	    launchConfig: LaunchConfig;
 	    gamePreferences: GamePreferences;
 	    lanConfig: LanConfig;
@@ -95,6 +96,7 @@ export namespace models {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.gameDir = source["gameDir"];
+	        this.knownGameDirs = source["knownGameDirs"];
 	        this.launchConfig = this.convertValues(source["launchConfig"], LaunchConfig);
 	        this.gamePreferences = this.convertValues(source["gamePreferences"], GamePreferences);
 	        this.lanConfig = this.convertValues(source["lanConfig"], LanConfig);
@@ -117,6 +119,34 @@ export namespace models {
 		    }
 		    return a;
 		}
+	}
+	export class GamePathItem {
+	    path: string;
+	    source: string;
+	    sourceName: string;
+	    isValid: boolean;
+	    version: string;
+	    modCount: number;
+	    mapCount: number;
+	    isActive: boolean;
+	    lastUsed: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new GamePathItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.source = source["source"];
+	        this.sourceName = source["sourceName"];
+	        this.isValid = source["isValid"];
+	        this.version = source["version"];
+	        this.modCount = source["modCount"];
+	        this.mapCount = source["mapCount"];
+	        this.isActive = source["isActive"];
+	        this.lastUsed = source["lastUsed"];
+	    }
 	}
 	
 	export class GameStatus {

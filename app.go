@@ -92,14 +92,41 @@ func (a *App) SelectGameDir() string {
 	return dir
 }
 
-// SetGameDir 设置并验证新的游戏目录
-func (a *App) SetGameDir(dir string) (models.GameStatus, error) {
-	if !a.gameService.ValidateGameDir(dir) {
-		return a.GetGameStatus(), fmt.Errorf("所选目录不是有效的铁锈战争根目录（需包含 game-lib.jar 和 mods/ 文件夹）")
+// DetectGameDirs 自动探测系统中全部可用的铁锈战争安装路径 (注册表/Steam库/进程/磁盘扫描)
+func (a *App) DetectGameDirs() []models.GamePathItem {
+	return a.gameService.DetectAllGameDirs()
+}
+
+// GetKnownGameDirs 获取当前已记录的游戏路径列表
+func (a *App) GetKnownGameDirs() []models.GamePathItem {
+	return a.gameService.GetKnownGameDirs()
+}
+
+// SwitchGameDir 切换当前游戏根路径并刷新健康状态
+func (a *App) SwitchGameDir(dir string) (models.GameStatus, error) {
+	if err := a.gameService.SwitchGameDir(dir); err != nil {
+		return a.GetGameStatus(), err
 	}
-	a.gameService.Config.GameDir = dir
-	_ = a.gameService.SaveConfig(a.gameService.Config)
 	return a.GetGameStatus(), nil
+}
+
+// AddCustomGameDir 添加并切换至自定义游戏根目录
+func (a *App) AddCustomGameDir(dir string) (models.GamePathItem, error) {
+	item, err := a.gameService.AddCustomGameDir(dir)
+	return item, err
+}
+
+// RemoveKnownGameDir 从记录中移除某个游戏路径
+func (a *App) RemoveKnownGameDir(dir string) ([]models.GamePathItem, error) {
+	if err := a.gameService.RemoveKnownGameDir(dir); err != nil {
+		return nil, err
+	}
+	return a.gameService.GetKnownGameDirs(), nil
+}
+
+// SetGameDir 设置并验证新的游戏目录 (兼容既有前端调用)
+func (a *App) SetGameDir(dir string) (models.GameStatus, error) {
+	return a.SwitchGameDir(dir)
 }
 
 // GetGameStatus 获取当前游戏客户端与模组整体健康状态
@@ -270,13 +297,23 @@ func (a *App) OpenFolder(folderType string) error {
 		target = filepath.Join(dir, "mods", "maps")
 	case "tools":
 		target = filepath.Join(dir, "tools")
+	case "game", "root":
+		target = dir
 	}
 
+	return a.OpenPath(target)
+}
+
+// OpenPath 在系统文件管理器中打开任意有效路径
+func (a *App) OpenPath(targetPath string) error {
+	if targetPath == "" {
+		return fmt.Errorf("路径为空")
+	}
 	var cmd *exec.Cmd
 	if stdRuntime.GOOS == "windows" {
-		cmd = exec.Command("explorer", target)
+		cmd = exec.Command("explorer", targetPath)
 	} else {
-		cmd = exec.Command("open", target)
+		cmd = exec.Command("open", targetPath)
 	}
 	return cmd.Start()
 }
