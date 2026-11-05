@@ -61,6 +61,7 @@ declare global {
           CheckForUpdates(): Promise<UpdateInfo>
           DownloadAndApplyUpdate(source: string): Promise<void>
           GetCurrentVersion(): Promise<string>
+          FreeMemory(): Promise<void>
         }
       }
     }
@@ -520,7 +521,11 @@ export function useApi() {
 
   const getCurrentVersion = async (): Promise<string> => {
     if (isWails()) return window.go!.main.App.GetCurrentVersion()
-    return '1.2.0'
+    return '1.2.2'
+  }
+
+  const freeMemory = async (): Promise<void> => {
+    if (isWails()) return (window.go!.main.App as any).FreeMemory()
   }
 
   return {
@@ -565,6 +570,7 @@ export function useApi() {
     // Updater
     checkForUpdates,
     downloadAndApplyUpdate,
-    getCurrentVersion
+    getCurrentVersion,
+    freeMemory
   }
 }

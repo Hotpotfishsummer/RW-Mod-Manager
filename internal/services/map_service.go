@@ -2,10 +2,13 @@ package services
 
 import (
 	"archive/zip"
+	"crypto/md5"
 	"encoding/base64"
 	"encoding/xml"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -41,9 +44,10 @@ var (
 	rePlayerCountMix     = regexp.MustCompile(`(?i)([0-9]{1,2})\s*p(?:混战|图)?`)
 )
 
-// ScanMaps 扫描独立地图与所有 rwmod 包中附带的地图，并标识其在游戏中的激活状态
+// ScanMaps 扫描独立地图与所有 rwmod 包中附带的地图，并标识其在游戏中的激活状态 (带有持久化缓存与零内存膨胀流式图片)
 func (s *MapService) ScanMaps(gameDir string) ([]models.MapItem, error) {
 	var allMaps []models.MapItem
+	cm := GetCacheManager()
 
 	// 1. 读取 preferences.ini 中的模组启用状态映射
 	statusMap, _ := s.prefService.ReadModSettings(gameDir)
@@ -60,16 +64,47 @@ func (s *MapService) ScanMaps(gameDir string) ([]models.MapItem, error) {
 			fullPath := filepath.Join(mapsDir, name)
 			nameLower := strings.ToLower(name)
 
+			info, _ := entry.Info()
+			var mtime, size int64
+			if info != nil {
+				mtime = info.ModTime().UnixNano()
+				size = info.Size()
+			}
+
 			if strings.HasSuffix(nameLower, ".tmx") {
-				// 独立地图：在游戏中常驻可用
-				m := s.parseTmxFile(fullPath, entry)
-				m.LocationType = "standalone"
-				m.Active = true
-				allMaps = append(allMaps, m)
+				// 独立地图：尝试从缓存命中
+				if cached, hit := cm.GetStandaloneMap(fullPath, mtime, size); hit {
+					cached.LocationType = "standalone"
+					cached.Active = true
+					// 快速检查预览更新
+					baseName := strings.TrimSuffix(name, filepath.Ext(name))
+					previewPath := filepath.Join(mapsDir, baseName+"_map.png")
+					if pfi, err := os.Stat(previewPath); err == nil && !pfi.IsDir() {
+						cached.HasPreview = true
+						cached.PreviewData = fmt.Sprintf("/api/thumbnail/map?id=%s&v=%d", url.QueryEscape(cached.ID), pfi.ModTime().UnixNano())
+					}
+					allMaps = append(allMaps, cached)
+				} else {
+					m := s.parseTmxFile(fullPath, entry)
+					m.LocationType = "standalone"
+					m.Active = true
+					cm.SetStandaloneMap(fullPath, mtime, size, m)
+					allMaps = append(allMaps, m)
+				}
 			} else if strings.HasSuffix(nameLower, ".rwmod") {
-				// 地图包 .rwmod
-				packMaps := s.parseMapPack(fullPath, entry, "map_pack", true, "")
-				allMaps = append(allMaps, packMaps...)
+				// 地图包 .rwmod：尝试从包缓存命中
+				if packMaps, hit := cm.GetPackMaps(fullPath, mtime, size); hit {
+					for i := range packMaps {
+						packMaps[i].LocationType = "map_pack"
+						packMaps[i].Active = true
+						packMaps[i].ParentModFile = ""
+					}
+					allMaps = append(allMaps, packMaps...)
+				} else {
+					packMaps := s.parseMapPack(fullPath, entry, "map_pack", true, "")
+					cm.SetPackMaps(fullPath, mtime, size, packMaps)
+					allMaps = append(allMaps, packMaps...)
+				}
 			}
 		}
 	}
@@ -87,10 +122,30 @@ func (s *MapService) ScanMaps(gameDir string) ([]models.MapItem, error) {
 			modHash := s.prefService.CalculateModHash(name)
 			isEnabled := statusMap[modHash] // 只有当所属模组启用时，其内嵌地图才在游戏中激活
 
-			modMaps := s.parseMapPack(fullPath, entry, "unit_mod", isEnabled, name)
-			allMaps = append(allMaps, modMaps...)
+			info, _ := entry.Info()
+			var mtime, size int64
+			if info != nil {
+				mtime = info.ModTime().UnixNano()
+				size = info.Size()
+			}
+
+			if packMaps, hit := cm.GetPackMaps(fullPath, mtime, size); hit {
+				for i := range packMaps {
+					packMaps[i].LocationType = "unit_mod"
+					packMaps[i].Active = isEnabled
+					packMaps[i].ParentModFile = name
+				}
+				allMaps = append(allMaps, packMaps...)
+			} else {
+				modMaps := s.parseMapPack(fullPath, entry, "unit_mod", isEnabled, name)
+				cm.SetPackMaps(fullPath, mtime, size, modMaps)
+				allMaps = append(allMaps, modMaps...)
+			}
 		}
 	}
+
+	// 异步持久化保存地图缓存
+	cm.SaveMapCache()
 
 	return allMaps, nil
 }
@@ -122,15 +177,11 @@ func (s *MapService) parseTmxFile(path string, d os.DirEntry) models.MapItem {
 		}
 	}
 
-	// 2. 检测是否存在同名缩略图 (baseName + "_map.png")
+	// 2. 检测是否存在同名缩略图 (baseName + "_map.png")，使用流式 URL 代替 Base64，大幅降低 WebView2 与 Go 内存占用
 	previewPath := filepath.Join(filepath.Dir(path), baseName+"_map.png")
 	if fi, err := os.Stat(previewPath); err == nil && !fi.IsDir() {
 		item.HasPreview = true
-		if fi.Size() < 5*1024*1024 {
-			if imgData, err := os.ReadFile(previewPath); err == nil {
-				item.PreviewData = "data:image/png;base64," + base64.StdEncoding.EncodeToString(imgData)
-			}
-		}
+		item.PreviewData = fmt.Sprintf("/api/thumbnail/map?id=%s&v=%d", url.QueryEscape(item.ID), fi.ModTime().UnixNano())
 	}
 
 	return item
@@ -189,18 +240,10 @@ func (s *MapService) parseMapPack(path string, d os.DirEntry, locType string, ac
 				}
 			}
 
-			// 检查匹配的缩略图
+			// 检查匹配的缩略图 (采用流式 API 路径，完全避免数百张图片内存常驻)
 			if pf, ok := previewMap[strings.ToLower(baseName)]; ok {
 				item.HasPreview = true
-				if pf.UncompressedSize64 < 5*1024*1024 {
-					if prc, err := pf.Open(); err == nil {
-						imgData, err := io.ReadAll(prc)
-						prc.Close()
-						if err == nil {
-							item.PreviewData = "data:image/png;base64," + base64.StdEncoding.EncodeToString(imgData)
-						}
-					}
-				}
+				item.PreviewData = fmt.Sprintf("/api/thumbnail/map?id=%s&v=%d", url.QueryEscape(item.ID), int64(pf.UncompressedSize64))
 			}
 
 			packMaps = append(packMaps, item)
@@ -261,6 +304,9 @@ func (s *MapService) GenerateThumbnail(gameDir string, tmxPath string) (string, 
 		return "", fmt.Errorf("生成缩略图失败: %w", err)
 	}
 
+	// 使得对应地图缓存失效，下次重新读取最新图
+	GetCacheManager().InvalidateMapCache(tmxPath)
+
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngBytes), nil
 }
 
@@ -298,10 +344,96 @@ func (s *MapService) BatchGenerateThumbnails(gameDir string, force bool) (int, e
 		}
 	}
 
+	// 批量更新后清空地图缓存
+	GetCacheManager().FlushAll()
+
 	return totalCount, nil
 }
 
 // BatchGenerateMissingThumbnails 保持向后兼容
 func (s *MapService) BatchGenerateMissingThumbnails(gameDir string) (int, error) {
 	return s.BatchGenerateThumbnails(gameDir, false)
+}
+
+// ServeMapThumbnail 流式提供单个地图的缩略图图片，带有浏览器强缓存与磁盘抽离缓存
+func (s *MapService) ServeMapThumbnail(w http.ResponseWriter, r *http.Request, gameDir, id string) {
+	if id == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	cm := GetCacheManager()
+
+	// 1. 若为独立地图：id 为文件名，如 "foo.tmx"
+	if !strings.Contains(id, "/") && !strings.Contains(id, ":") {
+		baseName := strings.TrimSuffix(id, filepath.Ext(id))
+		previewPath := filepath.Join(gameDir, "mods", "maps", baseName+"_map.png")
+		if fi, err := os.Stat(previewPath); err == nil && !fi.IsDir() {
+			w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
+			http.ServeFile(w, r, previewPath)
+			return
+		}
+	}
+
+	// 2. 若为包内地图：id 格式为 "pack.rwmod/path/to/map.tmx" 或 "pack.rwmod:entry"
+	var packName, entryName string
+	if strings.Contains(id, ":") {
+		parts := strings.SplitN(id, ":", 2)
+		packName = parts[0]
+		entryName = parts[1]
+	} else if strings.Contains(id, "/") {
+		parts := strings.SplitN(id, "/", 2)
+		packName = parts[0]
+		entryName = parts[1]
+	}
+
+	if packName != "" {
+		cacheHash := fmt.Sprintf("%x", md5.Sum([]byte(id)))
+		cachedThumbPath := filepath.Join(cm.ThumbnailDir(), "map_"+cacheHash+".png")
+
+		// 检查本地磁盘解压缓存
+		if cfi, err := os.Stat(cachedThumbPath); err == nil && !cfi.IsDir() {
+			w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
+			http.ServeFile(w, r, cachedThumbPath)
+			return
+		}
+
+		// 寻找宿主 .rwmod 路径 (优先 maps，其次 units)
+		var packPath string
+		cand1 := filepath.Join(gameDir, "mods", "maps", packName)
+		cand2 := filepath.Join(gameDir, "mods", "units", packName)
+		if fi, err := os.Stat(cand1); err == nil && !fi.IsDir() {
+			packPath = cand1
+		} else if fi, err := os.Stat(cand2); err == nil && !fi.IsDir() {
+			packPath = cand2
+		}
+
+		if packPath != "" {
+			if zr, err := zip.OpenReader(packPath); err == nil {
+				defer zr.Close()
+
+				mapBase := strings.TrimSuffix(filepath.Base(entryName), filepath.Ext(entryName))
+				targetSuffix := strings.ToLower(mapBase + "_map.png")
+
+				for _, f := range zr.File {
+					if strings.EqualFold(filepath.Base(f.Name), targetSuffix) || strings.HasSuffix(strings.ToLower(f.Name), targetSuffix) {
+						if rc, err := f.Open(); err == nil {
+							data, err := io.ReadAll(rc)
+							rc.Close()
+							if err == nil && len(data) > 0 {
+								_ = os.WriteFile(cachedThumbPath, data, 0644)
+								w.Header().Set("Content-Type", "image/png")
+								w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
+								w.WriteHeader(http.StatusOK)
+								_, _ = w.Write(data)
+								return
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	http.NotFound(w, r)
 }

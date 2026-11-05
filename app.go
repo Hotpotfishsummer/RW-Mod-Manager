@@ -3,9 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os/exec"
 	"path/filepath"
 	stdRuntime "runtime"
+	"runtime/debug"
+	"time"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -51,12 +54,54 @@ func (a *App) startup(ctx context.Context) {
 	a.lanService.SetWailsContext(ctx)
 	a.updateService.SetWailsContext(ctx)
 	a.lanService.Start()
+
+	// 启动后异步调度内存整理与操作系统内存返还，进一步压缩常驻工作集
+	go func() {
+		time.Sleep(3 * time.Second)
+		stdRuntime.GC()
+		debug.FreeOSMemory()
+	}()
 }
 
 func (a *App) shutdown(ctx context.Context) {
 	if a.lanService != nil {
 		a.lanService.Stop()
 	}
+	// 退出前刷盘持久化全部缓存
+	services.GetCacheManager().FlushAll()
+}
+
+// AssetHandler 提供 Wails AssetServer 自定义 HTTP 资源流式传输 (用于模组与地图封面，避免高占用 Base64)
+func (a *App) AssetHandler() http.Handler {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/api/thumbnail/mod", func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Query().Get("name")
+		dir := a.gameService.Config.GameDir
+		if dir == "" || name == "" {
+			http.NotFound(w, r)
+			return
+		}
+		a.modService.ServeModThumbnail(w, r, dir, name)
+	})
+
+	mux.HandleFunc("/api/thumbnail/map", func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Query().Get("id")
+		dir := a.gameService.Config.GameDir
+		if dir == "" || id == "" {
+			http.NotFound(w, r)
+			return
+		}
+		a.mapService.ServeMapThumbnail(w, r, dir, id)
+	})
+
+	return mux
+}
+
+// FreeMemory 显式触发 GC 与物理内存返还
+func (a *App) FreeMemory() {
+	stdRuntime.GC()
+	debug.FreeOSMemory()
 }
 
 // GetConfig 获取当前配置

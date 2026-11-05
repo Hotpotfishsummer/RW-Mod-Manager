@@ -8,21 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"sync"
-)
-
-type hashCacheItem struct {
-	modTime  int64
-	fileSize int64
-	hash     string
-}
-
-var (
-	contentHashCache sync.Map // map[string]hashCacheItem (key: absolutePath)
 )
 
 // CalculateContentHash 计算单文件或解包目录的真实内容 MD5 哈希
-// 带有 (modTime + fileSize) 内存缓存，避免频繁全量读取文件带来 I/O 负担
+// 带有磁盘持久化与内存 (modTime + fileSize) 双重缓存，彻底消除启动与同步时的全盘重复 I/O
 func CalculateContentHash(path string, isDir bool) string {
 	fi, err := os.Stat(path)
 	if err != nil {
@@ -32,11 +21,9 @@ func CalculateContentHash(path string, isDir bool) string {
 	mtime := fi.ModTime().UnixNano()
 	size := fi.Size()
 
-	if val, ok := contentHashCache.Load(path); ok {
-		cached := val.(hashCacheItem)
-		if cached.modTime == mtime && cached.fileSize == size && cached.hash != "" {
-			return cached.hash
-		}
+	cm := GetCacheManager()
+	if cachedHash, hit := cm.GetHash(path, mtime, size); hit {
+		return cachedHash
 	}
 
 	var hashStr string
@@ -47,11 +34,9 @@ func CalculateContentHash(path string, isDir bool) string {
 	}
 
 	if hashStr != "" {
-		contentHashCache.Store(path, hashCacheItem{
-			modTime:  mtime,
-			fileSize: size,
-			hash:     hashStr,
-		})
+		cm.SetHash(path, mtime, size, hashStr)
+		// 异步或按需保存
+		cm.SaveHashCache()
 	}
 
 	return hashStr

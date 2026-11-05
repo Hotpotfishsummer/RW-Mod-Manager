@@ -10,6 +10,10 @@ export function AddCustomGameDir(arg1) {
   return window['go']['main']['App']['AddCustomGameDir'](arg1);
 }
 
+export function AssetHandler() {
+  return window['go']['main']['App']['AssetHandler']();
+}
+
 export function BatchGenerateThumbnails(arg1) {
   return window['go']['main']['App']['BatchGenerateThumbnails'](arg1);
 }
@@ -32,6 +36,10 @@ export function DetectGameDirs() {
 
 export function DownloadAndApplyUpdate(arg1) {
   return window['go']['main']['App']['DownloadAndApplyUpdate'](arg1);
+}
+
+export function FreeMemory() {
+  return window['go']['main']['App']['FreeMemory']();
 }
 
 export function GenerateMapThumbnail(arg1) {

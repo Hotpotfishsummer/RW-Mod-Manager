@@ -28,7 +28,8 @@ func main() {
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
 		AssetServer: &assetserver.Options{
-			Assets: assets,
+			Assets:  assets,
+			Handler: app.AssetHandler(),
 		},
 		EnableDefaultContextMenu: true,
 		Windows: &windows.Options{
