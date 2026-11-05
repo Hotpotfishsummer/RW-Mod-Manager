@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bufio"
 	"bytes"
+	"compress/flate"
 	"crypto/md5"
 	"fmt"
 	"io"
@@ -178,21 +179,15 @@ func (s *ModService) parseRwmodArchive(path string, item *models.ModItem) {
 
 	// 1. 读取 mod-info.txt
 	if modInfoFile != nil {
-		if rc, err := modInfoFile.Open(); err == nil {
-			buf := new(bytes.Buffer)
-			_, _ = io.Copy(buf, rc)
-			rc.Close()
-			thumbNameCandidate = s.parseModInfoText(buf.Bytes(), item)
+		if data, err := s.readZipEntryBytes(modInfoFile); err == nil {
+			thumbNameCandidate = s.parseModInfoText(data, item)
 		}
 	}
 
 	// 2. 读取 steam.dat
 	if steamDatFile != nil {
-		if rc, err := steamDatFile.Open(); err == nil {
-			buf := new(bytes.Buffer)
-			_, _ = io.Copy(buf, rc)
-			rc.Close()
-			item.SteamID = s.parseSteamDat(buf.Bytes())
+		if data, err := s.readZipEntryBytes(steamDatFile); err == nil {
+			item.SteamID = s.parseSteamDat(data)
 		}
 	}
 
@@ -239,25 +234,56 @@ func (s *ModService) parseFolderMod(dirPath string, item *models.ModItem) {
 	}
 }
 
-// findModThumbnailInZip 在 zip 归档中定位真实有效的封面文件，支持 mod-info.txt 自定义名称与常见标准命名
-func (s *ModService) findModThumbnailInZip(r *zip.Reader, thumbCandidate string) *zip.File {
-	isCandidateFile := func(f *zip.File) bool {
-		clean := strings.Trim(strings.ReplaceAll(f.Name, "\\", "/"), "/")
-		if f.FileInfo().IsDir() || strings.HasSuffix(clean, "/") || f.UncompressedSize64 == 0 || f.UncompressedSize64 > 15*1024*1024 {
-			return false
-		}
-		// 校验能否正常打开且能读取头部字节，彻底排除带 .png/ 目录项等畸形条目
-		rc, err := f.Open()
-		if err != nil {
-			return false
-		}
-		buf := make([]byte, 16)
-		n, _ := io.ReadFull(rc, buf)
-		rc.Close()
-		return n >= 4
+// readZipEntryBytes 安全读取 zip 条目字节数据，具备对末尾带斜杠或特定打包格式条目的 OpenRaw 容错回退
+func (s *ModService) readZipEntryBytes(f *zip.File) ([]byte, error) {
+	if f.UncompressedSize64 == 0 || f.UncompressedSize64 > 15*1024*1024 {
+		return nil, fmt.Errorf("invalid entry size: %d", f.UncompressedSize64)
 	}
 
-	// 1. 若 mod-info.txt 指定了封面图，优先寻找
+	// 1. 标准 Open 尝试
+	rc, err := f.Open()
+	if err == nil {
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err == nil && len(data) > 0 {
+			return data, nil
+		}
+	}
+
+	// 2. 若标准 Open 报错（如部分模组作者打包导致文件名末尾带 / 被识别为 dirReader 产生 ErrFormat）
+	// 通过 OpenRaw 读取底层压缩数据流并手动解压
+	rawR, err := f.OpenRaw()
+	if err != nil {
+		return nil, err
+	}
+	var reader io.Reader = rawR
+	if f.Method == zip.Deflate {
+		flateR := flate.NewReader(rawR)
+		defer flateR.Close()
+		reader = flateR
+	}
+	return io.ReadAll(reader)
+}
+
+// findModThumbnailInZip 在 zip 归档中定位真实有效的封面文件，支持 mod-info.txt 自定义名称、常见标准命名及地图预览图兜底
+func (s *ModService) findModThumbnailInZip(r *zip.Reader, thumbCandidate string) *zip.File {
+	isCandidateFile := func(f *zip.File) bool {
+		if f.UncompressedSize64 == 0 || f.UncompressedSize64 > 15*1024*1024 {
+			return false
+		}
+		data, err := s.readZipEntryBytes(f)
+		if err != nil || len(data) < 4 {
+			return false
+		}
+		// 校验图片头部 (PNG, JPEG, GIF, BMP, WebP)
+		return (len(data) >= 8 && data[0] == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G') ||
+			(len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) ||
+			(len(data) >= 6 && (string(data[:6]) == "GIF89a" || string(data[:6]) == "GIF87a")) ||
+			(len(data) >= 2 && string(data[:2]) == "BM") ||
+			(len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP")
+	}
+
+	// 1. 若 mod-info.txt 指定了封面图，具有最高优先级
 	if thumbCandidate != "" {
 		candBase := strings.ToLower(filepath.Base(strings.Trim(strings.ReplaceAll(thumbCandidate, "\\", "/"), "/")))
 		for _, f := range r.File {
@@ -271,7 +297,7 @@ func (s *ModService) findModThumbnailInZip(r *zip.Reader, thumbCandidate string)
 		}
 	}
 
-	// 2. 依次匹配模组标准封面图候选名字 (绝不混淆 _map.png 地图预览图)
+	// 2. 依次匹配模组标准封面图候选名字
 	candidates := []string{
 		"thumbnail.png", "thumbnail.jpg", "thumbnail.jpeg",
 		"mod-thumbnail.png", "mod-thumbnail.jpg", "mod-thumbnail2.png",
@@ -288,6 +314,17 @@ func (s *ModService) findModThumbnailInZip(r *zip.Reader, thumbCandidate string)
 				if isCandidateFile(f) {
 					return f
 				}
+			}
+		}
+	}
+
+	// 3. 回退：模组未设置专属封面时，允许匹配模组内嵌自定义地图的预览图（_map.png）
+	for _, f := range r.File {
+		clean := strings.Trim(strings.ReplaceAll(f.Name, "\\", "/"), "/")
+		base := strings.ToLower(filepath.Base(clean))
+		if strings.HasSuffix(base, "_map.png") {
+			if isCandidateFile(f) {
+				return f
 			}
 		}
 	}
@@ -319,7 +356,17 @@ func (s *ModService) findModThumbnailInFolder(dirPath, thumbCandidate string) st
 		}
 	}
 
-	return ""
+	// 模组无专属封面时，检查是否有自定义地图预览图作为回退
+	var mapFallback string
+	_ = filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() && strings.HasSuffix(strings.ToLower(info.Name()), "_map.png") {
+			mapFallback = path
+			return filepath.SkipAll
+		}
+		return nil
+	})
+
+	return mapFallback
 }
 
 // parseModInfoText 解析 mod-info.txt 文本，返回指定的缩略图文件名
@@ -453,28 +500,22 @@ func (s *ModService) ServeModThumbnail(w http.ResponseWriter, r *http.Request, g
 			for _, f := range zr.File {
 				clean := strings.Trim(strings.ReplaceAll(f.Name, "\\", "/"), "/")
 				if strings.HasSuffix(strings.ToLower(clean), "mod-info.txt") {
-					if rc, err := f.Open(); err == nil {
-						if data, err := io.ReadAll(rc); err == nil {
-							var dummy models.ModItem
-							thumbCandidateName = s.parseModInfoText(data, &dummy)
-						}
-						rc.Close()
+					if data, err := s.readZipEntryBytes(f); err == nil {
+						var dummy models.ModItem
+						thumbCandidateName = s.parseModInfoText(data, &dummy)
 					}
 					break
 				}
 			}
 
-			// 2. 准确定位封面文件条目
+			// 2. 准确定位封面文件条目并提取
 			if tf := s.findModThumbnailInZip(&zr.Reader, thumbCandidateName); tf != nil {
-				if rc, err := tf.Open(); err == nil {
-					if data, err := io.ReadAll(rc); err == nil && len(data) > 0 {
-						imgBytes = data
-						lower := strings.ToLower(tf.Name)
-						if strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") || strings.HasSuffix(lower, ".jpg/") {
-							isJpeg = true
-						}
+				if data, err := s.readZipEntryBytes(tf); err == nil && len(data) > 0 {
+					imgBytes = data
+					detectedMime := http.DetectContentType(data)
+					if strings.HasPrefix(detectedMime, "image/jpeg") {
+						isJpeg = true
 					}
-					rc.Close()
 				}
 			}
 		}

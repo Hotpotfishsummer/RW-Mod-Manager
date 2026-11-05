@@ -2,6 +2,7 @@ package services
 
 import (
 	"archive/zip"
+	"compress/flate"
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/xml"
@@ -356,6 +357,36 @@ func (s *MapService) BatchGenerateMissingThumbnails(gameDir string) (int, error)
 }
 
 // ServeMapThumbnail 流式提供单个地图的缩略图图片，带有浏览器强缓存与磁盘抽离缓存
+// readZipEntryBytes 安全读取 zip 条目字节数据，具备对畸形条目或末尾带斜杠的 OpenRaw 容错回退
+func (s *MapService) readZipEntryBytes(f *zip.File) ([]byte, error) {
+	if f.UncompressedSize64 == 0 || f.UncompressedSize64 > 15*1024*1024 {
+		return nil, fmt.Errorf("invalid entry size: %d", f.UncompressedSize64)
+	}
+
+	// 1. 标准 Open 尝试
+	rc, err := f.Open()
+	if err == nil {
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err == nil && len(data) > 0 {
+			return data, nil
+		}
+	}
+
+	// 2. 若标准 Open 失败，通过 OpenRaw 与 flate 手动解压
+	rawR, err := f.OpenRaw()
+	if err != nil {
+		return nil, err
+	}
+	var reader io.Reader = rawR
+	if f.Method == zip.Deflate {
+		flateR := flate.NewReader(rawR)
+		defer flateR.Close()
+		reader = flateR
+	}
+	return io.ReadAll(reader)
+}
+
 func (s *MapService) ServeMapThumbnail(w http.ResponseWriter, r *http.Request, gameDir, id string) {
 	if id == "" {
 		http.NotFound(w, r)
@@ -416,18 +447,16 @@ func (s *MapService) ServeMapThumbnail(w http.ResponseWriter, r *http.Request, g
 				targetSuffix := strings.ToLower(mapBase + "_map.png")
 
 				for _, f := range zr.File {
-					if strings.EqualFold(filepath.Base(f.Name), targetSuffix) || strings.HasSuffix(strings.ToLower(f.Name), targetSuffix) {
-						if rc, err := f.Open(); err == nil {
-							data, err := io.ReadAll(rc)
-							rc.Close()
-							if err == nil && len(data) > 0 {
-								_ = os.WriteFile(cachedThumbPath, data, 0644)
-								w.Header().Set("Content-Type", "image/png")
-								w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
-								w.WriteHeader(http.StatusOK)
-								_, _ = w.Write(data)
-								return
-							}
+					cleanName := strings.Trim(strings.ReplaceAll(f.Name, "\\", "/"), "/")
+					cleanBase := filepath.Base(cleanName)
+					if strings.EqualFold(cleanBase, targetSuffix) || strings.HasSuffix(strings.ToLower(cleanName), targetSuffix) {
+						if data, err := s.readZipEntryBytes(f); err == nil && len(data) > 0 {
+							_ = os.WriteFile(cachedThumbPath, data, 0644)
+							w.Header().Set("Content-Type", "image/png")
+							w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
+							w.WriteHeader(http.StatusOK)
+							_, _ = w.Write(data)
+							return
 						}
 					}
 				}
