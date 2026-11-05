@@ -521,7 +521,7 @@ export function useApi() {
 
   const getCurrentVersion = async (): Promise<string> => {
     if (isWails()) return window.go!.main.App.GetCurrentVersion()
-    return '1.2.2'
+    return '1.2.3'
   }
 
   const freeMemory = async (): Promise<void> => {

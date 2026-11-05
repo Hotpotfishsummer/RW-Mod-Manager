@@ -171,13 +171,14 @@ const pushHubType = ref<'mod' | 'map'>('mod')
 const pushHubTargetFile = ref<string>('')
 
 // 更新器状态
-const currentVersion = ref('1.2.0')
+const currentVersion = ref('1.2.3')
 const updateInfo = ref<UpdateInfo | null>(null)
 const updateProgress = ref<UpdateProgress | null>(null)
 const checkingUpdate = ref(false)
 const updating = ref(false)
 const showUpdateModal = ref(false)
 const selectedUpdateSource = ref<'lan' | 'github'>('lan')
+const lastAutoPromptedVersion = ref<string>('')
 
 const presetTotalMods = computed(() => dynamicPreset.value?.mods?.length || 0)
 const presetEnabledMods = computed(() => dynamicPreset.value?.mods?.filter(m => m.enabled)?.length || 0)
@@ -603,6 +604,18 @@ async function pollLanStatus() {
     const peerList = await api.getDiscoveredPeers()
     peers.value = peerList || []
 
+    // 发现局域网存在更高版本的节点时，自动触发检查更新并跳至拉取页面
+    if (peerList && peerList.length > 0) {
+      for (const p of peerList) {
+        if (p.appVersion && compareVersions(p.appVersion, currentVersion.value) > 0) {
+          if (lastAutoPromptedVersion.value !== p.appVersion) {
+            handleCheckUpdate(true)
+            break
+          }
+        }
+      }
+    }
+
     // 若当前为客户端且发现了服务端，检查预设差异
     if (lanStatus.value.role === 'client' && lanStatus.value.activeServer) {
       try {
@@ -986,7 +999,21 @@ function openWorkshopLink(steamId: string) {
   }
 }
 
-// 检查软件更新 (支持静默探测与手动弹窗)
+// 版本号语义化比对
+function compareVersions(v1: string, v2: string): number {
+  const p1 = (v1 || '').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0)
+  const p2 = (v2 || '').replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0)
+  const maxLen = Math.max(p1.length, p2.length)
+  for (let i = 0; i < maxLen; i++) {
+    const num1 = p1[i] || 0
+    const num2 = p2[i] || 0
+    if (num1 > num2) return 1
+    if (num1 < num2) return -1
+  }
+  return 0
+}
+
+// 检查软件更新 (支持静默探测与手动探测，检测到新版本直接自动打开安装包拉取页面)
 async function handleCheckUpdate(silent: boolean = false) {
   checkingUpdate.value = true
   try {
@@ -996,10 +1023,12 @@ async function handleCheckUpdate(silent: boolean = false) {
       currentVersion.value = info.currentVersion || currentVersion.value
       selectedUpdateSource.value = info.source || 'lan'
       if (info.hasUpdate) {
-        if (!silent) {
-          showUpdateModal.value = true
-        } else {
-          showNotice(`检测到新版本 v${info.latestVersion} (${info.source === 'lan' ? '来自局域网房主' : '来自 GitHub Releases'})，点击顶部版本号升级`, 'info')
+        // 核心功能：检测到新版本直接自动打开安装包拉取弹窗，并切换至自检更新设置页
+        showUpdateModal.value = true
+        currentTab.value = 'settings'
+        if (!silent || lastAutoPromptedVersion.value !== info.latestVersion) {
+          lastAutoPromptedVersion.value = info.latestVersion
+          showNotice(`检测到新版本 v${info.latestVersion} (${info.source === 'lan' ? '来自局域网房主' : '来自 GitHub Releases'})，已自动打开安装包拉取页面`, 'info')
         }
       } else {
         if (!silent) {
@@ -1013,6 +1042,21 @@ async function handleCheckUpdate(silent: boolean = false) {
     }
   } finally {
     checkingUpdate.value = false
+  }
+}
+
+// 在默认浏览器中打开发布网页或直接拉取
+function handleOpenReleaseUrl() {
+  let targetUrl = 'https://github.com/Hotpotfishsummer/RW-Mod-Manager/releases/latest'
+  if (selectedUpdateSource.value === 'lan' && updateInfo.value?.downloadUrl) {
+    targetUrl = updateInfo.value.downloadUrl
+  } else if (updateInfo.value?.downloadUrl && updateInfo.value.downloadUrl.startsWith('http')) {
+    targetUrl = updateInfo.value.downloadUrl
+  }
+  if (typeof window !== 'undefined' && (window as any).runtime?.BrowserOpenURL) {
+    (window as any).runtime.BrowserOpenURL(targetUrl)
+  } else {
+    window.open(targetUrl, '_blank')
   }
 }
 
@@ -3919,12 +3963,20 @@ onUnmounted(() => {
                 </div>
               </div>
 
-              <!-- 一键执行更新按钮 -->
-              <div class="pt-2">
+              <!-- 一键执行更新按钮组 -->
+              <div class="pt-2 flex gap-2">
+                <button
+                  @click="handleOpenReleaseUrl"
+                  class="py-2.5 px-3.5 bg-m3-surface-container hover:bg-m3-surface-high border border-m3-outline text-m3-primary font-medium text-xs rounded-xl active:scale-95 transition flex items-center justify-center gap-1.5 shrink-0"
+                  title="在默认浏览器中打开安装包下载链接"
+                >
+                  <ExternalLink class="w-3.5 h-3.5" />
+                  <span>浏览器拉取</span>
+                </button>
                 <button
                   @click="handlePerformUpdate"
                   :disabled="updating"
-                  class="w-full py-2.5 px-4 bg-gradient-to-r from-m3-primary to-m3-primary-hover hover:brightness-110 text-white font-semibold text-xs rounded-xl shadow-m3-1 active:scale-95 transition flex items-center justify-center gap-2 disabled:opacity-50"
+                  class="flex-1 py-2.5 px-4 bg-gradient-to-r from-m3-primary to-m3-primary-hover hover:brightness-110 text-white font-semibold text-xs rounded-xl shadow-m3-1 active:scale-95 transition flex items-center justify-center gap-2 disabled:opacity-50"
                 >
                   <DownloadCloud class="w-4 h-4" :class="{ 'animate-bounce': updating }" />
                   <span>{{ updating ? '正在下载并准备热替换重启...' : '立即下载并自动热替换升级' }}</span>
@@ -4187,7 +4239,16 @@ onUnmounted(() => {
             @click="showUpdateModal = false"
             class="px-4 py-2 bg-m3-surface-high hover:bg-m3-surface-highest text-m3-on-surface-variant hover:text-m3-on-surface rounded-xl text-xs border border-m3-outline transition font-medium"
           >
-            关闭
+            稍后提醒
+          </button>
+          <button
+            v-if="updateInfo?.hasUpdate"
+            @click="handleOpenReleaseUrl"
+            class="px-3.5 py-2 bg-m3-surface-high hover:bg-m3-surface-highest text-m3-primary hover:text-m3-primary-hover rounded-xl text-xs border border-m3-primary/30 transition font-medium flex items-center gap-1.5"
+            title="在默认浏览器中打开并拉取安装包"
+          >
+            <ExternalLink class="w-3.5 h-3.5" />
+            <span>浏览器拉取</span>
           </button>
           <button
             v-if="updateInfo?.hasUpdate"
