@@ -1708,7 +1708,8 @@ onUnmounted(() => {
                   loading="lazy"
                   decoding="async"
                   class="w-full h-full object-cover transition group-hover:scale-105 duration-300"
-                  alt="Mod thumbnail"
+                  alt=""
+                  @error="item.thumbnail = ''"
                 />
                 <div v-else class="flex flex-col items-center justify-center text-m3-on-surface-dim gap-1.5">
                   <Package class="w-9 h-9 stroke-[1.2]" />
@@ -1844,7 +1845,7 @@ onUnmounted(() => {
                 </button>
 
                 <div class="w-11 h-11 rounded-lg bg-m3-surface-dim border border-m3-outline-variant overflow-hidden shrink-0 flex items-center justify-center">
-                  <img v-if="item.thumbnail" :src="item.thumbnail" loading="lazy" decoding="async" class="w-full h-full object-cover" alt="" />
+                  <img v-if="item.thumbnail" :src="item.thumbnail" loading="lazy" decoding="async" class="w-full h-full object-cover" alt="" @error="item.thumbnail = ''" />
                   <Package v-else class="w-5 h-5 text-m3-on-surface-dim" />
                 </div>
 
@@ -2078,7 +2079,8 @@ onUnmounted(() => {
                       loading="lazy"
                       decoding="async"
                       class="w-full h-full object-cover transition group-hover:scale-105 duration-200"
-                      alt="Map Preview"
+                      alt=""
+                      @error="m.hasPreview = false; m.previewData = ''"
                     />
                     <div v-else class="flex flex-col items-center justify-center text-m3-warning gap-1.5 p-3 text-center">
                       <ShieldAlert class="w-7 h-7 stroke-[1.5]" />
@@ -2244,7 +2246,8 @@ onUnmounted(() => {
                         loading="lazy"
                         decoding="async"
                         class="w-full h-full object-cover transition group-hover:scale-105 duration-200"
-                        alt="Map Preview"
+                        alt=""
+                        @error="m.hasPreview = false; m.previewData = ''"
                       />
                       <div v-else class="flex flex-col items-center justify-center text-m3-warning gap-1.5 p-3 text-center">
                         <ShieldAlert class="w-7 h-7 stroke-[1.5]" />
@@ -2415,7 +2418,8 @@ onUnmounted(() => {
                         loading="lazy"
                         decoding="async"
                         class="w-full h-full object-cover transition group-hover:scale-105 duration-200"
-                        alt="Map Preview"
+                        alt=""
+                        @error="m.hasPreview = false; m.previewData = ''"
                       />
                       <div v-else class="flex flex-col items-center justify-center text-m3-warning gap-1.5 p-3 text-center">
                         <ShieldAlert class="w-7 h-7 stroke-[1.5]" />

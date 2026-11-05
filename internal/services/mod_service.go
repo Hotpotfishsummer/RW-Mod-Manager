@@ -158,12 +158,12 @@ func (s *ModService) parseRwmodArchive(path string, item *models.ModItem) {
 
 	var modInfoFile *zip.File
 	var steamDatFile *zip.File
-	hasThumbnailCandidate := false
 	thumbNameCandidate := ""
 
 	for _, f := range r.File {
-		nameLower := strings.ToLower(f.Name)
-		if strings.HasSuffix(nameLower, ".ini") && !strings.HasPrefix(filepath.Base(f.Name), "__") {
+		clean := strings.Trim(strings.ReplaceAll(f.Name, "\\", "/"), "/")
+		nameLower := strings.ToLower(clean)
+		if strings.HasSuffix(nameLower, ".ini") && !strings.HasPrefix(filepath.Base(clean), "__") {
 			item.UnitCount++
 		} else if strings.HasSuffix(nameLower, ".tmx") {
 			item.MapCount++
@@ -196,36 +196,16 @@ func (s *ModService) parseRwmodArchive(path string, item *models.ModItem) {
 		}
 	}
 
-	// 3. 寻找是否存在缩略图文件
-	if thumbNameCandidate != "" {
-		for _, f := range r.File {
-			if strings.EqualFold(filepath.Base(f.Name), thumbNameCandidate) ||
-				strings.HasSuffix(strings.ToLower(f.Name), strings.ToLower(thumbNameCandidate)) {
-				hasThumbnailCandidate = true
-				break
-			}
-		}
-	}
-
-	if !hasThumbnailCandidate {
-		for _, f := range r.File {
-			base := strings.ToLower(filepath.Base(f.Name))
-			if base == "icon.png" || base == "logo.png" || base == "mod-thumbnail.png" || strings.HasSuffix(base, "_map.png") {
-				hasThumbnailCandidate = true
-				break
-			}
-		}
-	}
-
-	// 若存在封面，生成高效轻量的按需 API URL，彻底避免向前端发送数十兆 Base64 导致内存翻倍与启动卡顿
-	if hasThumbnailCandidate {
+	// 3. 严格校验是否存在有效可读的封面文件 (非目录项且大小大于 0)
+	if tf := s.findModThumbnailInZip(&r.Reader, thumbNameCandidate); tf != nil {
 		item.Thumbnail = fmt.Sprintf("/api/thumbnail/mod?name=%s&t=%d", url.QueryEscape(item.FileName), item.ModTime)
+	} else {
+		item.Thumbnail = ""
 	}
 }
 
 // parseFolderMod 解析解压目录模组
 func (s *ModService) parseFolderMod(dirPath string, item *models.ModItem) {
-	hasThumb := false
 	thumbCandidateName := ""
 
 	_ = filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
@@ -247,22 +227,99 @@ func (s *ModService) parseFolderMod(dirPath string, item *models.ModItem) {
 				if data, err := os.ReadFile(path); err == nil {
 					item.SteamID = s.parseSteamDat(data)
 				}
-			} else if base == "icon.png" || base == "logo.png" || base == "mod-thumbnail.png" {
-				hasThumb = true
 			}
 		}
 		return nil
 	})
 
-	if thumbCandidateName != "" {
-		if _, err := os.Stat(filepath.Join(dirPath, thumbCandidateName)); err == nil {
-			hasThumb = true
+	if thumbPath := s.findModThumbnailInFolder(dirPath, thumbCandidateName); thumbPath != "" {
+		item.Thumbnail = fmt.Sprintf("/api/thumbnail/mod?name=%s&t=%d", url.QueryEscape(item.FileName), item.ModTime)
+	} else {
+		item.Thumbnail = ""
+	}
+}
+
+// findModThumbnailInZip 在 zip 归档中定位真实有效的封面文件，支持 mod-info.txt 自定义名称与常见标准命名
+func (s *ModService) findModThumbnailInZip(r *zip.Reader, thumbCandidate string) *zip.File {
+	isCandidateFile := func(f *zip.File) bool {
+		clean := strings.Trim(strings.ReplaceAll(f.Name, "\\", "/"), "/")
+		if f.FileInfo().IsDir() || strings.HasSuffix(clean, "/") || f.UncompressedSize64 == 0 || f.UncompressedSize64 > 15*1024*1024 {
+			return false
+		}
+		// 校验能否正常打开且能读取头部字节，彻底排除带 .png/ 目录项等畸形条目
+		rc, err := f.Open()
+		if err != nil {
+			return false
+		}
+		buf := make([]byte, 16)
+		n, _ := io.ReadFull(rc, buf)
+		rc.Close()
+		return n >= 4
+	}
+
+	// 1. 若 mod-info.txt 指定了封面图，优先寻找
+	if thumbCandidate != "" {
+		candBase := strings.ToLower(filepath.Base(strings.Trim(strings.ReplaceAll(thumbCandidate, "\\", "/"), "/")))
+		for _, f := range r.File {
+			clean := strings.Trim(strings.ReplaceAll(f.Name, "\\", "/"), "/")
+			base := strings.ToLower(filepath.Base(clean))
+			if base == candBase || strings.HasSuffix(strings.ToLower(clean), strings.ToLower(thumbCandidate)) {
+				if isCandidateFile(f) {
+					return f
+				}
+			}
 		}
 	}
 
-	if hasThumb {
-		item.Thumbnail = fmt.Sprintf("/api/thumbnail/mod?name=%s&t=%d", url.QueryEscape(item.FileName), item.ModTime)
+	// 2. 依次匹配模组标准封面图候选名字 (绝不混淆 _map.png 地图预览图)
+	candidates := []string{
+		"thumbnail.png", "thumbnail.jpg", "thumbnail.jpeg",
+		"mod-thumbnail.png", "mod-thumbnail.jpg", "mod-thumbnail2.png",
+		"icon.png", "icon.jpg", "icon.jpeg",
+		"logo.png", "logo.jpg", "logo.jpeg",
+		"cover.png", "cover.jpg",
 	}
+
+	for _, cand := range candidates {
+		for _, f := range r.File {
+			clean := strings.Trim(strings.ReplaceAll(f.Name, "\\", "/"), "/")
+			base := strings.ToLower(filepath.Base(clean))
+			if base == cand {
+				if isCandidateFile(f) {
+					return f
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// findModThumbnailInFolder 在解压文件夹模组中寻找真实存在的封面文件
+func (s *ModService) findModThumbnailInFolder(dirPath, thumbCandidate string) string {
+	if thumbCandidate != "" {
+		candPath := filepath.Join(dirPath, thumbCandidate)
+		if fi, err := os.Stat(candPath); err == nil && !fi.IsDir() && fi.Size() > 0 {
+			return candPath
+		}
+	}
+
+	candidates := []string{
+		"thumbnail.png", "thumbnail.jpg", "thumbnail.jpeg",
+		"mod-thumbnail.png", "mod-thumbnail.jpg",
+		"icon.png", "icon.jpg",
+		"logo.png", "logo.jpg",
+		"cover.png", "cover.jpg",
+	}
+
+	for _, cand := range candidates {
+		candPath := filepath.Join(dirPath, cand)
+		if fi, err := os.Stat(candPath); err == nil && !fi.IsDir() && fi.Size() > 0 {
+			return candPath
+		}
+	}
+
+	return ""
 }
 
 // parseModInfoText 解析 mod-info.txt 文本，返回指定的缩略图文件名
@@ -370,16 +427,20 @@ func (s *ModService) ServeModThumbnail(w http.ResponseWriter, r *http.Request, g
 	var isJpeg bool
 
 	if fi.IsDir() {
-		// 文件夹模组：寻找 icon.png / logo.png / mod-thumbnail.png
-		candidates := []string{"icon.png", "logo.png", "mod-thumbnail.png", "icon.jpg", "logo.jpg"}
-		for _, cand := range candidates {
-			candPath := filepath.Join(modPath, cand)
-			if data, err := os.ReadFile(candPath); err == nil && len(data) > 0 {
+		// 寻找文件夹模组中的封面
+		thumbCandidateName := ""
+		if modInfoData, err := os.ReadFile(filepath.Join(modPath, "mod-info.txt")); err == nil {
+			var dummy models.ModItem
+			thumbCandidateName = s.parseModInfoText(modInfoData, &dummy)
+		}
+		foundPath := s.findModThumbnailInFolder(modPath, thumbCandidateName)
+		if foundPath != "" {
+			if data, err := os.ReadFile(foundPath); err == nil && len(data) > 0 {
 				imgBytes = data
-				if strings.HasSuffix(cand, ".jpg") {
+				lower := strings.ToLower(foundPath)
+				if strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") {
 					isJpeg = true
 				}
-				break
 			}
 		}
 	} else {
@@ -387,20 +448,29 @@ func (s *ModService) ServeModThumbnail(w http.ResponseWriter, r *http.Request, g
 		if zr, err := zip.OpenReader(modPath); err == nil {
 			defer zr.Close()
 
-			var targetFile *zip.File
+			// 1. 读取 mod-info.txt 获取候选封面
+			thumbCandidateName := ""
 			for _, f := range zr.File {
-				b := strings.ToLower(filepath.Base(f.Name))
-				if b == "icon.png" || b == "logo.png" || b == "mod-thumbnail.png" || b == "icon.jpg" || b == "logo.jpg" || strings.HasSuffix(b, "_map.png") {
-					targetFile = f
+				clean := strings.Trim(strings.ReplaceAll(f.Name, "\\", "/"), "/")
+				if strings.HasSuffix(strings.ToLower(clean), "mod-info.txt") {
+					if rc, err := f.Open(); err == nil {
+						if data, err := io.ReadAll(rc); err == nil {
+							var dummy models.ModItem
+							thumbCandidateName = s.parseModInfoText(data, &dummy)
+						}
+						rc.Close()
+					}
 					break
 				}
 			}
 
-			if targetFile != nil && targetFile.UncompressedSize64 < 10*1024*1024 {
-				if rc, err := targetFile.Open(); err == nil {
-					if data, err := io.ReadAll(rc); err == nil {
+			// 2. 准确定位封面文件条目
+			if tf := s.findModThumbnailInZip(&zr.Reader, thumbCandidateName); tf != nil {
+				if rc, err := tf.Open(); err == nil {
+					if data, err := io.ReadAll(rc); err == nil && len(data) > 0 {
 						imgBytes = data
-						if strings.HasSuffix(strings.ToLower(targetFile.Name), ".jpg") || strings.HasSuffix(strings.ToLower(targetFile.Name), ".jpeg") {
+						lower := strings.ToLower(tf.Name)
+						if strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") || strings.HasSuffix(lower, ".jpg/") {
 							isJpeg = true
 						}
 					}

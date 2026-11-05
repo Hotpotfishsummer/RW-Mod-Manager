@@ -1,6 +1,8 @@
 package services
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -162,6 +164,42 @@ func TestScanPerformanceWithCache(t *testing.T) {
 			if !strings.HasPrefix(mp.PreviewData, "/api/thumbnail/map") {
 				t.Fatalf("Map PreviewData should be streaming URL, got %s", mp.PreviewData)
 			}
+		}
+	}
+}
+
+func TestModThumbnailServingAndFallback(t *testing.T) {
+	gameDir := `E:\Rusted Warfare\Rusted Warfare`
+	prefSvc := NewPrefService()
+	modSvc := NewModService(prefSvc)
+
+	// 清理旧缓存确保重新全量走严谨的封面提取流程
+	cm := GetCacheManager()
+	cm.modMu.Lock()
+	cm.modCache = make(map[string]ModCacheEntry)
+	cm.modDirty = true
+	cm.modMu.Unlock()
+	cm.SaveModCache()
+
+	mods, err := modSvc.ScanMods(gameDir)
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+
+	for _, m := range mods {
+		if m.Thumbnail != "" {
+			req, _ := http.NewRequest("GET", m.Thumbnail, nil)
+			rec := httptest.NewRecorder()
+			modSvc.ServeModThumbnail(rec, req, gameDir, m.FileName)
+			if rec.Code != http.StatusOK {
+				t.Errorf("FAILED to serve thumbnail for mod %s: status=%d", m.FileName, rec.Code)
+			}
+			if rec.Body.Len() == 0 {
+				t.Errorf("Empty thumbnail body for mod %s", m.FileName)
+			}
+		} else {
+			// 没有合法封面的模组必须为 ""，确保前端渲染优雅占位而非裂图
+			t.Logf("Mod %s correctly has no thumbnail (clean fallback)", m.FileName)
 		}
 	}
 }
