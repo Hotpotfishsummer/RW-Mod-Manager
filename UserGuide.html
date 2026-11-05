@@ -274,7 +274,7 @@
   <div class="container">
     <!-- Header -->
     <header>
-      <div class="badge">Rusted Warfare Manager v1.2.0</div>
+      <div class="badge">Rusted Warfare Manager v1.2.1</div>
       <h1>🎮 铁锈战争 模组与地图管理器 · 使用说明书</h1>
       <p class="subtitle">专为《铁锈战争》打造的跨代工坊管理、原生出生点战术标绘、局域网联机预设同步与 P2P 极速自更新一体化工具</p>
     </header>
@@ -385,8 +385,9 @@
       <h3>主要联机操作说明</h3>
       <ul>
         <li><strong>切换角色：</strong>在顶部右上角或“局域网联机”选项卡中点击 <strong>“客户端”</strong> 或 <strong>“房主服务端”</strong> 即可秒切。</li>
+        <li><strong>深度内容 MD5 精准校验：</strong>模组与地图同步全面基于真实<strong>内容 MD5（ContentHash）</strong>，包含解压文件夹内部所有文件的递归组合哈希。即使房主在不改变文件名的情况下修改了模组内部代码或参数，客户端也能精准侦测并触发<strong>“内容变动覆盖同步”</strong>，绝不会漏同或误判。</li>
         <li><strong>动态启动预设感知：</strong>管理器持续侦听本地模组状态。即使在游戏中按下 <span class="code-tag">Ctrl+F5</span> 重载模组，管理器也会动态刷新预设特征哈希。</li>
-        <li><strong>一键同步房主预设：</strong>客户端连接到房主后，可在面板中查看预设差异详情（缺失哪些模组、哪几个模组状态不符），点击 <strong>“一键同步房主预设”</strong> 即可自动完成下载与启用状态对齐。</li>
+        <li><strong>一键同步房主预设：</strong>客户端连接到房主后，可在面板中查看预设差异详情（缺失模组、内容变动需覆盖模组、状态不符模组），点击 <strong>“一键同步房主预设”</strong> 即可自动完成下载与启用状态对齐。</li>
         <li><strong>队员向房主推送模组：</strong>队员想推荐自己制作的好玩模组给房主？在“模组”列表点击 <strong>“向房主推送”</strong>，房主端将收到实时审批弹窗，房主点击“接受”即可自动传送到房主电脑上。</li>
         <li><strong>多网卡与虚拟专网绑定：</strong>若使用 <strong>Tailscale</strong>、<strong>Radmin VPN</strong>、<strong>蒲公英</strong> 等虚拟局域网联机，请在设置中将“绑定的网络子网”下拉选择为对应的虚拟网卡。</li>
       </ul>
