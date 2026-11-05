@@ -1,6 +1,7 @@
 package services
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -191,4 +192,35 @@ func TestVersionComparisonAndUpdater(t *testing.T) {
 	// 3. 测试 GitHub 最新发布版本探测接口
 	ghInfo, err := updateSvc.CheckGithubUpdate()
 	t.Logf("CheckGithubUpdate result: info=%+v, err=%v", ghInfo, err)
+}
+
+func TestContentHashAndOutdatedModSync(t *testing.T) {
+	tempDir := t.TempDir()
+	modFile := filepath.Join(tempDir, "sample_unit.rwmod")
+	err := os.WriteFile(modFile, []byte("v1 content: hp=100"), 0644)
+	if err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	hash1 := CalculateContentHash(modFile, false)
+	if hash1 == "" {
+		t.Fatalf("Expected non-empty hash1")
+	}
+
+	// 缓存命中校验
+	cachedHash := CalculateContentHash(modFile, false)
+	if cachedHash != hash1 {
+		t.Fatalf("Expected cached hash %s, got %s", hash1, cachedHash)
+	}
+
+	// 修改内容后重新计算
+	err = os.WriteFile(modFile, []byte("v2 content: hp=999"), 0644)
+	if err != nil {
+		t.Fatalf("WriteFile v2 failed: %v", err)
+	}
+	hash2 := CalculateContentHash(modFile, false)
+	if hash2 == "" || hash2 == hash1 {
+		t.Fatalf("Expected hash2 to change from %s, got %s", hash1, hash2)
+	}
+	t.Logf("ContentHash changed successfully from %s to %s", hash1, hash2)
 }

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onErrorCaptured } from 'vue'
+import { ref, computed, onMounted, onUnmounted, onErrorCaptured } from 'vue'
+import TitleBar from './components/TitleBar.vue'
 import {
   Package,
   Map as MapIcon,
@@ -1061,7 +1062,55 @@ function cycleTheme() {
   }
 }
 
+// 窗口状态与无边框客户端自绘标题栏 (CSD) 控制
+const isMaximized = ref(false)
+
+const checkWindowState = async () => {
+  try {
+    if (typeof window !== 'undefined' && (window as any).runtime?.WindowIsMaximised) {
+      isMaximized.value = await (window as any).runtime.WindowIsMaximised()
+    }
+  } catch (err) {
+    console.warn('检查窗口状态失败:', err)
+  }
+}
+
+const handleToggleMaximize = async () => {
+  try {
+    if (typeof window !== 'undefined' && (window as any).runtime?.WindowToggleMaximise) {
+      await (window as any).runtime.WindowToggleMaximise()
+      setTimeout(checkWindowState, 100)
+    } else {
+      isMaximized.value = !isMaximized.value
+    }
+  } catch (err) {
+    console.error('切换窗口最大化失败:', err)
+  }
+}
+
+const handleMinimize = () => {
+  try {
+    if (typeof window !== 'undefined' && (window as any).runtime?.WindowMinimise) {
+      (window as any).runtime.WindowMinimise()
+    }
+  } catch (err) {
+    console.error('最小化窗口失败:', err)
+  }
+}
+
+const handleClose = () => {
+  try {
+    if (typeof window !== 'undefined' && (window as any).runtime?.Quit) {
+      (window as any).runtime.Quit()
+    }
+  } catch (err) {
+    console.error('关闭窗口失败:', err)
+  }
+}
+
 onMounted(() => {
+  checkWindowState()
+  window.addEventListener('resize', checkWindowState)
   // 初始化主题设置与系统深浅色偏好监听
   try {
     const savedTheme = (localStorage.getItem('rw_theme_mode') as ThemeMode) || 'auto'
@@ -1139,12 +1188,34 @@ onMounted(() => {
     })
   }
 })
+
+onUnmounted(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('resize', checkWindowState)
+  }
+})
 </script>
 
 <template>
-  <div class="flex flex-col h-screen w-screen overflow-hidden font-sans">
+  <div
+    class="flex flex-col h-screen w-screen overflow-hidden font-sans select-none bg-m3-surface text-m3-on-surface"
+    :class="[
+      isMaximized ? 'rounded-none' : 'rounded-xl border border-m3-outline-variant/60 shadow-2xl'
+    ]"
+  >
+    <!-- 客户端自绘标题栏 (CSD - Client-Side Decoration Title Bar) -->
+    <TitleBar
+      :is-maximized="isMaximized"
+      :current-version="currentVersion"
+      :game-dir="gameStatus.gameDir"
+      :is-valid-game="gameStatus.isValid"
+      @toggle-maximize="handleToggleMaximize"
+      @minimize="handleMinimize"
+      @close="handleClose"
+    />
+
     <!-- 顶部导航栏 (Material Design 3 Top App Bar) -->
-    <header class="flex items-center justify-between px-3 sm:px-6 py-2.5 bg-m3-surface-low border-b border-m3-outline-variant shrink-0 gap-2 sm:gap-4 overflow-hidden">
+    <header class="wails-draggable flex items-center justify-between px-3 sm:px-6 py-2.5 bg-m3-surface-low border-b border-m3-outline-variant shrink-0 gap-2 sm:gap-4 overflow-hidden">
       <!-- 左侧：品牌信息与全局连接状态 (纯展示与导航，小窗口时优先隐藏文字以保障右侧操作按钮完整展示) -->
       <div class="flex items-center gap-2 sm:gap-3.5 min-w-0 shrink">
         <!-- Logo 与标题 -->
@@ -2736,13 +2807,21 @@ onMounted(() => {
                       </div>
 
                       <div v-if="!syncDiff?.isInSync && syncDiff" class="mt-2 space-y-1 font-mono text-[11px] text-m3-on-surface-variant">
-                        <div v-if="(syncDiff.missingMods?.length || 0) > 0">
-                          <span class="text-m3-warning font-semibold">缺失模组：</span>
-                          {{ (syncDiff.missingMods || []).map(m => m.fileName).join(', ') }}
+                        <div v-if="(syncDiff.outdatedMods?.length || 0) > 0">
+                          <span class="text-amber-400 font-semibold">内容变动需覆盖模组：</span>
+                          {{ (syncDiff.outdatedMods || []).map(m => m.fileName).join(', ') }}
                         </div>
-                        <div v-if="(syncDiff.missingMaps?.length || 0) > 0">
-                          <span class="text-m3-warning font-semibold">缺失地图：</span>
-                          {{ (syncDiff.missingMaps || []).map(m => m.fileName).join(', ') }}
+                        <div v-if="(syncDiff.missingMods?.length || 0) > (syncDiff.outdatedMods?.length || 0)">
+                          <span class="text-m3-warning font-semibold">缺失新增模组：</span>
+                          {{ (syncDiff.missingMods || []).filter(m => !(syncDiff?.outdatedMods || []).some(om => om.fileName === m.fileName)).map(m => m.fileName).join(', ') }}
+                        </div>
+                        <div v-if="(syncDiff.outdatedMaps?.length || 0) > 0">
+                          <span class="text-amber-400 font-semibold">内容变动需覆盖地图：</span>
+                          {{ (syncDiff.outdatedMaps || []).map(m => m.fileName).join(', ') }}
+                        </div>
+                        <div v-if="(syncDiff.missingMaps?.length || 0) > (syncDiff.outdatedMaps?.length || 0)">
+                          <span class="text-m3-warning font-semibold">缺失新增地图：</span>
+                          {{ (syncDiff.missingMaps || []).filter(m => !(syncDiff?.outdatedMaps || []).some(om => om.fileName === m.fileName)).map(m => m.fileName).join(', ') }}
                         </div>
                         <div v-if="(syncDiff.stateMismatches?.length || 0) > 0">
                           <span class="text-m3-warning font-semibold">启禁用需调整：</span>

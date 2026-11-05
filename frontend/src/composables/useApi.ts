@@ -446,6 +446,8 @@ export function useApi() {
       if (res) {
         res.missingMods = res.missingMods || []
         res.missingMaps = res.missingMaps || []
+        res.outdatedMods = res.outdatedMods || []
+        res.outdatedMaps = res.outdatedMaps || []
         res.stateMismatches = res.stateMismatches || []
       }
       return res
@@ -456,6 +458,8 @@ export function useApi() {
       isInSync: true,
       missingMods: [],
       missingMaps: [],
+      outdatedMods: [],
+      outdatedMaps: [],
       stateMismatches: [],
       extraModsCount: 0,
       summary: '启动预设与房主服务端完全一致，已就绪'

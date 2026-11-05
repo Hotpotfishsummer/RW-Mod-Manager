@@ -128,6 +128,7 @@ export interface PresetModItem {
   fileName: string
   title: string
   hash: string
+  contentHash?: string
   fileSize: number
   enabled: boolean
   isDir: boolean
@@ -140,6 +141,7 @@ export interface PresetMapItem {
   locationType: 'standalone' | 'map_pack' | 'unit_mod'
   active: boolean
   fileSize: number
+  contentHash?: string
   parentModFile: string
 }
 
@@ -158,6 +160,8 @@ export interface SyncDiff {
   isInSync: boolean
   missingMods: PresetModItem[]
   missingMaps: PresetMapItem[]
+  outdatedMods?: PresetModItem[]
+  outdatedMaps?: PresetMapItem[]
   stateMismatches: PresetModItem[]
   extraModsCount: number
   summary: string

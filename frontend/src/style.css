@@ -184,3 +184,32 @@ input[type="range"]::-webkit-slider-thumb:active {
   transform: scale(1.25);
   box-shadow: 0 0 0 6px rgb(var(--m3-primary) / 0.25);
 }
+
+/* ==========================================================================
+   Frameless Window & CSD (Client-Side Decoration) Titlebar Drag Rules
+   ========================================================================== */
+.wails-draggable,
+[data-wails-drag] {
+  --wails-draggable: drag;
+  user-select: none;
+}
+
+.wails-no-drag,
+[data-wails-no-drag],
+button,
+input,
+select,
+textarea,
+a,
+[role="button"] {
+  --wails-draggable: no-drag;
+}
+
+/* Windows 11 CSD Titlebar Button Styling */
+.csd-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.12s ease, color 0.12s ease;
+  --wails-draggable: no-drag;
+}

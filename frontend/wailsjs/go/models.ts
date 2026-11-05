@@ -266,6 +266,7 @@ export namespace models {
 	    locationType: string;
 	    active: boolean;
 	    fileSize: number;
+	    contentHash: string;
 	    parentModFile: string;
 	
 	    static createFrom(source: any = {}) {
@@ -280,6 +281,7 @@ export namespace models {
 	        this.locationType = source["locationType"];
 	        this.active = source["active"];
 	        this.fileSize = source["fileSize"];
+	        this.contentHash = source["contentHash"];
 	        this.parentModFile = source["parentModFile"];
 	    }
 	}
@@ -287,6 +289,7 @@ export namespace models {
 	    fileName: string;
 	    title: string;
 	    hash: string;
+	    contentHash: string;
 	    fileSize: number;
 	    enabled: boolean;
 	    isDir: boolean;
@@ -300,6 +303,7 @@ export namespace models {
 	        this.fileName = source["fileName"];
 	        this.title = source["title"];
 	        this.hash = source["hash"];
+	        this.contentHash = source["contentHash"];
 	        this.fileSize = source["fileSize"];
 	        this.enabled = source["enabled"];
 	        this.isDir = source["isDir"];
@@ -485,6 +489,8 @@ export namespace models {
 	    isInSync: boolean;
 	    missingMods: PresetModItem[];
 	    missingMaps: PresetMapItem[];
+	    outdatedMods: PresetModItem[];
+	    outdatedMaps: PresetMapItem[];
 	    stateMismatches: PresetModItem[];
 	    extraModsCount: number;
 	    summary: string;
@@ -500,6 +506,8 @@ export namespace models {
 	        this.isInSync = source["isInSync"];
 	        this.missingMods = this.convertValues(source["missingMods"], PresetModItem);
 	        this.missingMaps = this.convertValues(source["missingMaps"], PresetMapItem);
+	        this.outdatedMods = this.convertValues(source["outdatedMods"], PresetModItem);
+	        this.outdatedMaps = this.convertValues(source["outdatedMaps"], PresetMapItem);
 	        this.stateMismatches = this.convertValues(source["stateMismatches"], PresetModItem);
 	        this.extraModsCount = source["extraModsCount"];
 	        this.summary = source["summary"];

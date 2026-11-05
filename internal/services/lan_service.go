@@ -316,14 +316,18 @@ func (s *LanService) RefreshDynamicPreset() (*models.LaunchPreset, error) {
 	}
 
 	presetMods := make([]models.PresetModItem, 0)
+	unitsDir := filepath.Join(gameDir, "mods", "units")
 	for _, m := range mods {
+		modPath := filepath.Join(unitsDir, m.FileName)
+		contentHash := CalculateContentHash(modPath, m.IsDir)
 		presetMods = append(presetMods, models.PresetModItem{
-			FileName: m.FileName,
-			Title:    m.Title,
-			Hash:     m.ID,
-			FileSize: m.FileSize,
-			Enabled:  m.Enabled,
-			IsDir:    m.IsDir,
+			FileName:    m.FileName,
+			Title:       m.Title,
+			Hash:        m.ID,
+			ContentHash: contentHash,
+			FileSize:    m.FileSize,
+			Enabled:     m.Enabled,
+			IsDir:       m.IsDir,
 		})
 	}
 	sort.Slice(presetMods, func(i, j int) bool {
@@ -332,6 +336,14 @@ func (s *LanService) RefreshDynamicPreset() (*models.LaunchPreset, error) {
 
 	presetMaps := make([]models.PresetMapItem, 0)
 	for _, mp := range maps {
+		mapFullPath := mp.FilePath
+		if !filepath.IsAbs(mapFullPath) {
+			mapFullPath = filepath.Join(gameDir, mapFullPath)
+		}
+		mapHash := ""
+		if !mp.IsPack {
+			mapHash = CalculateContentHash(mapFullPath, false)
+		}
 		presetMaps = append(presetMaps, models.PresetMapItem{
 			FileName:      mp.FileName,
 			Title:         mp.Title,
@@ -339,6 +351,7 @@ func (s *LanService) RefreshDynamicPreset() (*models.LaunchPreset, error) {
 			LocationType:  mp.LocationType,
 			Active:        mp.Active,
 			FileSize:      mp.FileSize,
+			ContentHash:   mapHash,
 			ParentModFile: mp.ParentModFile,
 		})
 	}
@@ -346,13 +359,13 @@ func (s *LanService) RefreshDynamicPreset() (*models.LaunchPreset, error) {
 		return presetMaps[i].FileName < presetMaps[j].FileName
 	})
 
-	// 计算确定性特征哈希 (VersionHash)
+	// 计算确定性特征哈希 (VersionHash，包含文件名、内容MD5、文件大小与启用状态)
 	hasher := sha256.New()
 	for _, m := range presetMods {
-		hasher.Write([]byte(fmt.Sprintf("%s|%d|%t;", m.FileName, m.FileSize, m.Enabled)))
+		hasher.Write([]byte(fmt.Sprintf("%s|%s|%d|%t;", m.FileName, m.ContentHash, m.FileSize, m.Enabled)))
 	}
 	for _, mp := range presetMaps {
-		hasher.Write([]byte(fmt.Sprintf("%s|%d|%t;", mp.FileName, mp.FileSize, mp.Active)))
+		hasher.Write([]byte(fmt.Sprintf("%s|%s|%d|%t;", mp.FileName, mp.ContentHash, mp.FileSize, mp.Active)))
 	}
 	versionHash := fmt.Sprintf("%064X", hasher.Sum(nil))[:16]
 
@@ -405,6 +418,8 @@ func (s *LanService) ComparePresetWithServer(serverIP string, serverPort int) (*
 		ClientPresetHash: localPreset.VersionHash,
 		MissingMods:      make([]models.PresetModItem, 0),
 		MissingMaps:      make([]models.PresetMapItem, 0),
+		OutdatedMods:     make([]models.PresetModItem, 0),
+		OutdatedMaps:     make([]models.PresetMapItem, 0),
 		StateMismatches:  make([]models.PresetModItem, 0),
 	}
 
@@ -413,16 +428,21 @@ func (s *LanService) ComparePresetWithServer(serverIP string, serverPort int) (*
 		localModMap[m.FileName] = m
 	}
 
-	// 检查模组缺失与状态不一致
+	// 检查模组缺失、内容变更(MD5不同或大小不同)与启禁用状态不一致
 	for _, sm := range serverPreset.Mods {
-		if lm, exists := localModMap[sm.FileName]; !exists {
+		lm, exists := localModMap[sm.FileName]
+		if !exists {
 			diff.MissingMods = append(diff.MissingMods, sm)
+		} else if (sm.ContentHash != "" && lm.ContentHash != "" && sm.ContentHash != lm.ContentHash) || (sm.FileSize > 0 && lm.FileSize > 0 && sm.FileSize != lm.FileSize) {
+			// 同名但内容已被房主修改或文件大小不一致：标记为待覆盖更新
+			diff.OutdatedMods = append(diff.OutdatedMods, sm)
+			diff.MissingMods = append(diff.MissingMods, sm) // 加入下载同步列表覆盖本地旧文件
 		} else if lm.Enabled != sm.Enabled {
 			diff.StateMismatches = append(diff.StateMismatches, sm)
 		}
 	}
 
-	// 检查地图缺失
+	// 检查地图缺失与内容变更
 	localMapMap := make(map[string]models.PresetMapItem)
 	for _, mp := range localPreset.Maps {
 		localMapMap[mp.FileName] = mp
@@ -430,8 +450,12 @@ func (s *LanService) ComparePresetWithServer(serverIP string, serverPort int) (*
 
 	for _, smp := range serverPreset.Maps {
 		if smp.LocationType == "standalone" || smp.LocationType == "map_pack" {
-			if _, exists := localMapMap[smp.FileName]; !exists {
+			lmp, exists := localMapMap[smp.FileName]
+			if !exists {
 				diff.MissingMaps = append(diff.MissingMaps, smp)
+			} else if (smp.ContentHash != "" && lmp.ContentHash != "" && smp.ContentHash != lmp.ContentHash) || (smp.FileSize > 0 && lmp.FileSize > 0 && smp.FileSize != lmp.FileSize) {
+				diff.OutdatedMaps = append(diff.OutdatedMaps, smp)
+				diff.MissingMaps = append(diff.MissingMaps, smp) // 加入下载同步列表覆盖本地旧文件
 			}
 		}
 	}
@@ -440,10 +464,28 @@ func (s *LanService) ComparePresetWithServer(serverIP string, serverPort int) (*
 
 	var summaryParts []string
 	if len(diff.MissingMods) > 0 {
-		summaryParts = append(summaryParts, fmt.Sprintf("缺失 %d 个模组", len(diff.MissingMods)))
+		if len(diff.OutdatedMods) > 0 {
+			pureMissing := len(diff.MissingMods) - len(diff.OutdatedMods)
+			if pureMissing > 0 {
+				summaryParts = append(summaryParts, fmt.Sprintf("缺失 %d 个模组，%d 个模组内容已更新需重新同步", pureMissing, len(diff.OutdatedMods)))
+			} else {
+				summaryParts = append(summaryParts, fmt.Sprintf("%d 个模组内容已被房主更新，需同步覆盖", len(diff.OutdatedMods)))
+			}
+		} else {
+			summaryParts = append(summaryParts, fmt.Sprintf("缺失 %d 个模组", len(diff.MissingMods)))
+		}
 	}
 	if len(diff.MissingMaps) > 0 {
-		summaryParts = append(summaryParts, fmt.Sprintf("缺失 %d 张地图", len(diff.MissingMaps)))
+		if len(diff.OutdatedMaps) > 0 {
+			pureMissing := len(diff.MissingMaps) - len(diff.OutdatedMaps)
+			if pureMissing > 0 {
+				summaryParts = append(summaryParts, fmt.Sprintf("缺失 %d 张地图，%d 张地图内容已更新", pureMissing, len(diff.OutdatedMaps)))
+			} else {
+				summaryParts = append(summaryParts, fmt.Sprintf("%d 张地图内容已被房主更新，需同步覆盖", len(diff.OutdatedMaps)))
+			}
+		} else {
+			summaryParts = append(summaryParts, fmt.Sprintf("缺失 %d 张地图", len(diff.MissingMaps)))
+		}
 	}
 	if len(diff.StateMismatches) > 0 {
 		summaryParts = append(summaryParts, fmt.Sprintf("%d 个模组启禁用状态不一致", len(diff.StateMismatches)))

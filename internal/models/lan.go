@@ -44,12 +44,13 @@ type LanConfig struct {
 
 // PresetModItem 启动预设中的模组条目
 type PresetModItem struct {
-	FileName string `json:"fileName"` // 文件名 (例如 "od_origin.rwmod")
-	Title    string `json:"title"`    // 模组标题
-	Hash     string `json:"hash"`     // 识别码 (SHA256)
-	FileSize int64  `json:"fileSize"` // 文件大小 (字节)
-	Enabled  bool   `json:"enabled"`  // preferences.ini 中的启用状态
-	IsDir    bool   `json:"isDir"`    // 是否为解压文件夹
+	FileName    string `json:"fileName"`    // 文件名 (例如 "od_origin.rwmod")
+	Title       string `json:"title"`       // 模组标题
+	Hash        string `json:"hash"`        // 铁锈原生识别码 (SHA256 of filename)
+	ContentHash string `json:"contentHash"` // 真实文件内容哈希 (MD5)
+	FileSize    int64  `json:"fileSize"`    // 文件大小 (字节)
+	Enabled     bool   `json:"enabled"`     // preferences.ini 中的启用状态
+	IsDir       bool   `json:"isDir"`       // 是否为解压文件夹
 }
 
 // PresetMapItem 启动预设中的地图条目
@@ -60,6 +61,7 @@ type PresetMapItem struct {
 	LocationType  string `json:"locationType"`  // "standalone" | "map_pack" | "unit_mod"
 	Active        bool   `json:"active"`        // 是否战局可用
 	FileSize      int64  `json:"fileSize"`      // 大小
+	ContentHash   string `json:"contentHash"`   // 真实文件内容哈希 (MD5)
 	ParentModFile string `json:"parentModFile"` // 宿主模组文件名 (若是 unit_mod)
 }
 
@@ -78,8 +80,10 @@ type SyncDiff struct {
 	ServerPresetHash string          `json:"serverPresetHash"`
 	ClientPresetHash string          `json:"clientPresetHash"`
 	IsInSync         bool            `json:"isInSync"`        // 两端预设是否完全一致
-	MissingMods      []PresetModItem `json:"missingMods"`     // 客户端缺失、需要从服务端下载的模组
-	MissingMaps      []PresetMapItem `json:"missingMaps"`     // 客户端缺失、需要从服务端下载的地图
+	MissingMods      []PresetModItem `json:"missingMods"`     // 客户端缺失、需要从服务端下载的模组 (含内容变动的模组)
+	MissingMaps      []PresetMapItem `json:"missingMaps"`     // 客户端缺失、需要从服务端下载的地图 (含内容变动的地图)
+	OutdatedMods     []PresetModItem `json:"outdatedMods"`     // 本地存在但内容已修改、需覆盖更新的模组
+	OutdatedMaps     []PresetMapItem `json:"outdatedMaps"`     // 本地存在但内容已修改、需覆盖更新的地图
 	StateMismatches  []PresetModItem `json:"stateMismatches"` // 模组已存在但启用/禁用状态不同的项 (需对齐)
 	ExtraModsCount   int             `json:"extraModsCount"`  // 客户端多出来的本地模组
 	Summary          string          `json:"summary"`         // 差异摘要文本

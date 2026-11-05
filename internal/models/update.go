@@ -1,7 +1,7 @@
 package models
 
 // AppVersion 当前应用版本号
-const AppVersion = "1.2.0"
+const AppVersion = "1.2.1"
 
 // GithubOwnerAndRepo 官方 GitHub 仓库标识
 const GithubOwnerAndRepo = "Hotpotfishsummer/RW-Mod-Manager"
