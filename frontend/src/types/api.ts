@@ -175,8 +175,29 @@ export interface PushRequest {
   itemType: 'mod' | 'map'
   fileName: string
   fileSize: number
-  status: 'pending' | 'accepted' | 'rejected' | 'completed'
+  contentHash?: string
+  existingHash?: string
+  existingSize?: number
+  hasConflict?: boolean
+  status: 'pending' | 'accepted' | 'uploading' | 'rejected' | 'completed' | 'superseded' | 'expired'
   createdAt: number
+}
+
+export interface PushResult {
+  success: boolean
+  status: 'completed' | 'already_exists'
+  requestId: string
+  itemType: 'mod' | 'map'
+  fileName: string
+  fileSize: number
+  contentHash: string
+  serverName: string
+  serverIp: string
+  overwritten: boolean
+  backupCreated: boolean
+  skippedUpload: boolean
+  message: string
+  completedAt: number
 }
 
 export interface LanStatus {

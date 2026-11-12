@@ -263,6 +263,15 @@ func (a *App) BatchToggleMods(enableAll bool) error {
 	return a.prefService.SaveModSettings(dir, statusMap)
 }
 
+// ArchiveMod 归档或删除指定的单位模组
+func (a *App) ArchiveMod(fileName string, permanently bool) error {
+	dir := a.gameService.Config.GameDir
+	if !a.gameService.ValidateGameDir(dir) {
+		return fmt.Errorf("游戏路径未配置或无效")
+	}
+	return a.modService.ArchiveMod(dir, fileName, permanently)
+}
+
 // ScanMaps 扫描并返回所有地图 (包含独立地图与所有模组中附带的地图)
 func (a *App) ScanMaps() ([]models.MapItem, error) {
 	dir := a.gameService.Config.GameDir
@@ -296,6 +305,15 @@ func (a *App) BatchGenerateThumbnails(force bool) (int, error) {
 		return 0, fmt.Errorf("游戏路径未配置或无效")
 	}
 	return a.mapService.BatchGenerateThumbnails(dir, force)
+}
+
+// ArchiveMap 归档或删除指定的独立地图或地图包
+func (a *App) ArchiveMap(mapTarget string, permanently bool) error {
+	dir := a.gameService.Config.GameDir
+	if !a.gameService.ValidateGameDir(dir) {
+		return fmt.Errorf("游戏路径未配置或无效")
+	}
+	return a.mapService.ArchiveMap(dir, mapTarget, permanently)
 }
 
 // GetGamePreferences 获取 preferences.ini 中的内置画质、高刷与帧率参数
@@ -414,7 +432,7 @@ func (a *App) SyncFromHost(serverIP string, serverPort int) error {
 }
 
 // RequestPushToHost 客户端发起推送文件给服务端
-func (a *App) RequestPushToHost(serverIP string, serverPort int, itemType string, fileName string) error {
+func (a *App) RequestPushToHost(serverIP string, serverPort int, itemType string, fileName string) (*models.PushResult, error) {
 	return a.lanService.RequestPushToHost(serverIP, serverPort, itemType, fileName)
 }
 

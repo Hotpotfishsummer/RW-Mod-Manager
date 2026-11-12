@@ -140,6 +140,45 @@ func (s *PrefService) SaveModSettings(gameDir string, modStatuses map[string]boo
 	return os.WriteFile(prefPath, []byte(finalContent), 0644)
 }
 
+// RemoveModSetting 从 preferences.ini 中移除指定哈希的模组记录
+func (s *PrefService) RemoveModSetting(gameDir string, modHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	prefPath := filepath.Join(gameDir, "preferences.ini")
+	data, err := os.ReadFile(prefPath)
+	if err != nil {
+		return err
+	}
+
+	var outputLines []string
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "modSettings:") {
+			raw := strings.TrimPrefix(trimmed, "modSettings:")
+			items := strings.Split(raw, ",")
+			var keep []string
+			for _, item := range items {
+				parts := strings.Split(item, "|")
+				if len(parts) >= 2 {
+					h := strings.TrimSpace(parts[1])
+					if !strings.EqualFold(h, modHash) {
+						keep = append(keep, item)
+					}
+				}
+			}
+			outputLines = append(outputLines, "modSettings:"+strings.Join(keep, ","))
+		} else {
+			outputLines = append(outputLines, line)
+		}
+	}
+
+	finalContent := strings.Join(outputLines, "\r\n") + "\r\n"
+	return os.WriteFile(prefPath, []byte(finalContent), 0644)
+}
+
 // ReadGamePreferences 读取画质、高刷与帧率控制参数
 func (s *PrefService) ReadGamePreferences(gameDir string) (models.GamePreferences, error) {
 	s.mu.RLock()

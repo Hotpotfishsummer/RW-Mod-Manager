@@ -4,7 +4,9 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/md5"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -47,6 +49,9 @@ type LanService struct {
 	mapService  *MapService
 
 	mu                  sync.RWMutex
+	fileWriteMu         sync.Mutex
+	pushFlightMu        sync.Mutex
+	pushInFlight        map[string]bool
 	peers               map[string]*models.LanPeer
 	pendingPushRequests map[string]*models.PushRequest
 	currentPreset       *models.LaunchPreset
@@ -69,6 +74,7 @@ func NewLanService(game *GameService, pref *PrefService, mod *ModService, mapSvc
 		prefService:         pref,
 		modService:          mod,
 		mapService:          mapSvc,
+		pushInFlight:        make(map[string]bool),
 		peers:               make(map[string]*models.LanPeer),
 		pendingPushRequests: make(map[string]*models.PushRequest),
 		ctx:                 ctx,
@@ -573,51 +579,179 @@ func (s *LanService) SyncWithServer(serverIP string, serverPort int) error {
 	return nil
 }
 
+// resolvePushDestPath 安全解析推送目标在服务端游戏目录中的存放路径
+func (s *LanService) resolvePushDestPath(gameDir, itemType, fileName string) (string, string, error) {
+	cleanName := filepath.Base(strings.TrimSpace(fileName))
+	if cleanName == "" || cleanName == "." || cleanName == ".." || strings.ContainsAny(cleanName, `/\`) {
+		return "", "", fmt.Errorf("非法的目标文件名: %s", fileName)
+	}
+	var destDir string
+	switch itemType {
+	case "mod":
+		destDir = filepath.Join(gameDir, "mods", "units")
+	case "map":
+		destDir = filepath.Join(gameDir, "mods", "maps")
+	default:
+		return "", "", fmt.Errorf("不支持的推送资源类型: %s", itemType)
+	}
+	return destDir, filepath.Join(destDir, cleanName), nil
+}
+
+// pruneStalePushRequestsLocked 清理过期或已完结的历史推送请求 (调用前需持有 s.mu 写锁)
+func (s *LanService) pruneStalePushRequestsLocked() bool {
+	now := time.Now().Unix()
+	pendingChanged := false
+	for id, req := range s.pendingPushRequests {
+		age := now - req.CreatedAt
+		if req.Status == "pending" && age > 90 {
+			req.Status = "expired"
+			pendingChanged = true
+		} else if req.Status != "pending" && req.Status != "accepted" && req.Status != "uploading" && age > 600 {
+			delete(s.pendingPushRequests, id)
+		} else if (req.Status == "accepted" || req.Status == "uploading") && age > 600 {
+			delete(s.pendingPushRequests, id)
+		}
+	}
+	return pendingChanged
+}
+
 // RequestPushToHost 客户端向服务端发起推送模组/地图文件的请求
-func (s *LanService) RequestPushToHost(serverIP string, serverPort int, itemType string, fileName string) error {
+func (s *LanService) RequestPushToHost(serverIP string, serverPort int, itemType string, fileName string) (*models.PushResult, error) {
 	gameDir := s.gameService.Config.GameDir
+	if !s.gameService.ValidateGameDir(gameDir) {
+		return nil, fmt.Errorf("游戏目录未配置或无效")
+	}
+
+	cleanName := filepath.Base(strings.TrimSpace(fileName))
+	if cleanName == "" || cleanName == "." || cleanName == ".." {
+		return nil, fmt.Errorf("非法的文件名: %s", fileName)
+	}
+
 	var localFilePath string
-	if itemType == "mod" {
-		localFilePath = filepath.Join(gameDir, "mods", "units", fileName)
-	} else {
-		localFilePath = filepath.Join(gameDir, "mods", "maps", fileName)
+	switch itemType {
+	case "mod":
+		localFilePath = filepath.Join(gameDir, "mods", "units", cleanName)
+	case "map":
+		localFilePath = filepath.Join(gameDir, "mods", "maps", cleanName)
+	default:
+		return nil, fmt.Errorf("不支持的推送类型: %s", itemType)
 	}
 
 	fi, err := os.Stat(localFilePath)
 	if err != nil {
-		return fmt.Errorf("本地文件不存在: %w", err)
+		return nil, fmt.Errorf("本地文件不存在: %w", err)
 	}
+
+	effectiveName := cleanName
+	uploadPath := localFilePath
+	fileSize := fi.Size()
+
+	// 若为解压文件夹模组，先打包为临时 .rwmod 压缩包以获取准确体积与 MD5
+	if fi.IsDir() {
+		tmpPath, packedSize, packErr := packDirToTempRwmod(localFilePath)
+		if packErr != nil {
+			return nil, packErr
+		}
+		defer os.Remove(tmpPath)
+
+		if !strings.HasSuffix(strings.ToLower(effectiveName), ".rwmod") {
+			effectiveName = effectiveName + ".rwmod"
+		}
+		uploadPath = tmpPath
+		fileSize = packedSize
+	}
+
+	// 客户端并发防重入保护，避免同一目标在传输/等待审批中被重复触发
+	flightKey := fmt.Sprintf("%s:%d|%s|%s", serverIP, serverPort, itemType, effectiveName)
+	s.pushFlightMu.Lock()
+	if s.pushInFlight[flightKey] {
+		s.pushFlightMu.Unlock()
+		return nil, fmt.Errorf("文件 %s 正在推送处理中，请勿重复点击", effectiveName)
+	}
+	s.pushInFlight[flightKey] = true
+	s.pushFlightMu.Unlock()
+	defer func() {
+		s.pushFlightMu.Lock()
+		delete(s.pushInFlight, flightKey)
+		s.pushFlightMu.Unlock()
+	}()
+
+	contentHash := CalculateContentHash(uploadPath, false)
+
+	// 查找房主显示名
+	serverName := serverIP
+	s.mu.RLock()
+	for _, p := range s.peers {
+		if p.IP == serverIP && p.HttpPort == serverPort {
+			if p.DeviceName != "" {
+				serverName = p.DeviceName
+			}
+			break
+		}
+	}
+	s.mu.RUnlock()
 
 	cfg := s.gameService.Config.LanConfig
 	reqPayload := map[string]interface{}{
-		"peerId":   cfg.InstanceID,
-		"peerName": cfg.DeviceName,
-		"itemType": itemType,
-		"fileName": fileName,
-		"fileSize": fi.Size(),
+		"peerId":      cfg.InstanceID,
+		"peerName":    cfg.DeviceName,
+		"itemType":    itemType,
+		"fileName":    effectiveName,
+		"fileSize":    fileSize,
+		"contentHash": contentHash,
 	}
 	payloadBytes, _ := json.Marshal(reqPayload)
 
+	apiClient := &http.Client{Timeout: 15 * time.Second}
 	reqURL := fmt.Sprintf("http://%s:%d/api/lan/push-request", serverIP, serverPort)
-	resp, err := http.Post(reqURL, "application/json", bytes.NewReader(payloadBytes))
+	resp, err := apiClient.Post(reqURL, "application/json", bytes.NewReader(payloadBytes))
 	if err != nil {
-		return fmt.Errorf("发起推送请求失败: %w", err)
+		return nil, fmt.Errorf("发起推送请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("服务端拒绝推送请求 (%d): %s", resp.StatusCode, strings.TrimSpace(string(errBody)))
+	}
+
 	var pushResp struct {
-		Accepted  bool   `json:"accepted"`
-		Pending   bool   `json:"pending"`
-		RequestID string `json:"requestId"`
-		Message   string `json:"message"`
+		AlreadyExists bool   `json:"alreadyExists"`
+		Accepted      bool   `json:"accepted"`
+		Pending       bool   `json:"pending"`
+		RequestID     string `json:"requestId"`
+		HasConflict   bool   `json:"hasConflict"`
+		Deduplicated  bool   `json:"deduplicated"`
+		Message       string `json:"message"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&pushResp); err != nil {
-		return fmt.Errorf("服务端响应解析失败: %w", err)
+		return nil, fmt.Errorf("服务端响应解析失败: %w", err)
+	}
+
+	if pushResp.AlreadyExists {
+		msg := pushResp.Message
+		if msg == "" {
+			msg = "房主服务端已存在完全一致的文件 (MD5 校验相同)，已跳过重复传输"
+		}
+		return &models.PushResult{
+			Success:       true,
+			Status:        "already_exists",
+			RequestID:     pushResp.RequestID,
+			ItemType:      itemType,
+			FileName:      effectiveName,
+			FileSize:      fileSize,
+			ContentHash:   contentHash,
+			ServerName:    serverName,
+			ServerIP:      serverIP,
+			SkippedUpload: true,
+			Message:       msg,
+			CompletedAt:   time.Now().Unix(),
+		}, nil
 	}
 
 	if pushResp.Accepted {
 		// 服务端配置了自动接受，立即上传
-		return s.uploadFileToServer(serverIP, serverPort, pushResp.RequestID, itemType, fileName, localFilePath)
+		return s.uploadFileToServer(serverIP, serverPort, pushResp.RequestID, itemType, effectiveName, uploadPath, fileSize, contentHash, serverName)
 	}
 
 	if pushResp.Pending {
@@ -625,31 +759,46 @@ func (s *LanService) RequestPushToHost(serverIP string, serverPort int, itemType
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 		timeout := time.After(60 * time.Second)
+		pollClient := &http.Client{Timeout: 5 * time.Second}
 
 		for {
 			select {
+			case <-s.ctx.Done():
+				return nil, fmt.Errorf("推送已取消：服务正在关闭")
 			case <-timeout:
-				return fmt.Errorf("等待房主确认超时 (60s)")
+				return nil, fmt.Errorf("等待房主确认超时 (60s)")
 			case <-ticker.C:
-				statusURL := fmt.Sprintf("http://%s:%d/api/lan/push-status?id=%s", serverIP, serverPort, pushResp.RequestID)
-				sResp, err := http.Get(statusURL)
+				statusURL := fmt.Sprintf("http://%s:%d/api/lan/push-status?id=%s", serverIP, serverPort, url.QueryEscape(pushResp.RequestID))
+				sResp, err := pollClient.Get(statusURL)
 				if err != nil {
 					continue
 				}
+				if sResp.StatusCode == http.StatusNotFound {
+					sResp.Body.Close()
+					return nil, fmt.Errorf("推送请求在服务端已失效或被清理")
+				}
 				var st models.PushRequest
-				_ = json.NewDecoder(sResp.Body).Decode(&st)
+				decodeErr := json.NewDecoder(sResp.Body).Decode(&st)
 				sResp.Body.Close()
+				if decodeErr != nil {
+					continue
+				}
 
-				if st.Status == "accepted" {
-					return s.uploadFileToServer(serverIP, serverPort, pushResp.RequestID, itemType, fileName, localFilePath)
-				} else if st.Status == "rejected" {
-					return fmt.Errorf("房主已拒绝此模组/地图的推送请求")
+				switch st.Status {
+				case "accepted":
+					return s.uploadFileToServer(serverIP, serverPort, pushResp.RequestID, itemType, effectiveName, uploadPath, fileSize, contentHash, serverName)
+				case "rejected":
+					return nil, fmt.Errorf("房主已拒绝此模组/地图的推送请求")
+				case "superseded":
+					return nil, fmt.Errorf("该推送请求已被同一文件的新版本替代")
+				case "expired":
+					return nil, fmt.Errorf("推送请求已在服务端超时过期")
 				}
 			}
 		}
 	}
 
-	return fmt.Errorf("推送失败: %s", pushResp.Message)
+	return nil, fmt.Errorf("推送失败: %s", pushResp.Message)
 }
 
 // HandlePushDecision 服务端处理客户端发起的推送请求 (接受或拒绝)
@@ -659,6 +808,11 @@ func (s *LanService) HandlePushDecision(requestID string, accept bool) error {
 	if !exists {
 		s.mu.Unlock()
 		return fmt.Errorf("未找到对应的推送请求: %s", requestID)
+	}
+	if req.Status != "pending" {
+		status := req.Status
+		s.mu.Unlock()
+		return fmt.Errorf("该推送请求当前状态为 %s，无法重复审批", status)
 	}
 
 	if accept {
@@ -676,8 +830,8 @@ func (s *LanService) HandlePushDecision(requestID string, accept bool) error {
 
 // GetPendingPushRequests 获取当前所有处于 pending 状态的待处理推送请求
 func (s *LanService) GetPendingPushRequests() []models.PushRequest {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	s.pruneStalePushRequestsLocked()
 
 	list := make([]models.PushRequest, 0)
 	for _, r := range s.pendingPushRequests {
@@ -685,6 +839,14 @@ func (s *LanService) GetPendingPushRequests() []models.PushRequest {
 			list = append(list, *r)
 		}
 	}
+	s.mu.Unlock()
+
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].CreatedAt == list[j].CreatedAt {
+			return list[i].FileName < list[j].FileName
+		}
+		return list[i].CreatedAt > list[j].CreatedAt
+	})
 	return list
 }
 
@@ -1088,31 +1250,123 @@ func (s *LanService) startHttpServer() {
 		}
 
 		var payload struct {
-			PeerID   string `json:"peerId"`
-			PeerName string `json:"peerName"`
-			ItemType string `json:"itemType"`
-			FileName string `json:"fileName"`
-			FileSize int64  `json:"fileSize"`
+			PeerID      string `json:"peerId"`
+			PeerName    string `json:"peerName"`
+			ItemType    string `json:"itemType"`
+			FileName    string `json:"fileName"`
+			FileSize    int64  `json:"fileSize"`
+			ContentHash string `json:"contentHash"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			http.Error(w, "Invalid body", http.StatusBadRequest)
 			return
 		}
 
-		reqID := uuid.New().String()
-		pushReq := &models.PushRequest{
-			ID:        reqID,
-			PeerID:    payload.PeerID,
-			PeerName:  payload.PeerName,
-			ItemType:  payload.ItemType,
-			FileName:  payload.FileName,
-			FileSize:  payload.FileSize,
-			Status:    "pending",
-			CreatedAt: time.Now().Unix(),
+		gameDir := s.gameService.Config.GameDir
+		if !s.gameService.ValidateGameDir(gameDir) {
+			http.Error(w, "服务端游戏目录未配置或无效", http.StatusServiceUnavailable)
+			return
+		}
+
+		_, destPath, err := s.resolvePushDestPath(gameDir, payload.ItemType, payload.FileName)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		cleanFileName := filepath.Base(destPath)
+
+		peerIP := r.RemoteAddr
+		if host, _, splitErr := net.SplitHostPort(r.RemoteAddr); splitErr == nil {
+			peerIP = host
+		}
+
+		// 检查服务端是否已存在同名文件及其 MD5
+		var existingHash string
+		var existingSize int64
+		var hasConflict bool
+		if existingInfo, statErr := os.Stat(destPath); statErr == nil {
+			existingSize = existingInfo.Size()
+			existingHash = CalculateContentHash(destPath, existingInfo.IsDir())
+
+			// 同名且 MD5 完全一致：无需重复上传或打扰房主审批
+			if !existingInfo.IsDir() && existingHash != "" && payload.ContentHash != "" && strings.EqualFold(existingHash, payload.ContentHash) {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"alreadyExists": true,
+					"accepted":      false,
+					"pending":       false,
+					"requestId":     "",
+					"message":       "房主服务端已存在完全一致的文件 (MD5 校验相同)，已跳过重复传输",
+				})
+				return
+			}
+			hasConflict = true
 		}
 
 		s.mu.Lock()
+		pendingChanged := s.pruneStalePushRequestsLocked()
 		cfg := s.gameService.Config.LanConfig
+
+		// 检查同一客户端对同一资源是否已有待处理的请求 (防多次点击产生重复审批卡片)
+		for _, existingReq := range s.pendingPushRequests {
+			if existingReq.Status != "pending" {
+				continue
+			}
+			samePeer := (payload.PeerID != "" && existingReq.PeerID == payload.PeerID) ||
+				(payload.PeerID == "" && existingReq.PeerIP == peerIP)
+			if !samePeer || existingReq.ItemType != payload.ItemType || existingReq.FileName != cleanFileName {
+				continue
+			}
+
+			sameContent := (payload.ContentHash == "" && existingReq.ContentHash == "") ||
+				(payload.ContentHash != "" && strings.EqualFold(existingReq.ContentHash, payload.ContentHash))
+
+			if sameContent {
+				existingReq.CreatedAt = time.Now().Unix()
+				existingReq.PeerIP = peerIP
+				existingReq.PeerName = payload.PeerName
+				existingID := existingReq.ID
+				existingConflict := existingReq.HasConflict
+				s.mu.Unlock()
+
+				if pendingChanged && s.wailsCtx != nil {
+					wailsRuntime.EventsEmit(s.wailsCtx, "lan:push_requests_updated", s.GetPendingPushRequests())
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"accepted":     false,
+					"pending":      true,
+					"requestId":    existingID,
+					"hasConflict":  existingConflict,
+					"deduplicated": true,
+					"message":      "推送请求已在等待房主审批中",
+				})
+				return
+			}
+
+			// 同一客户端对同一文件名推送了不同 MD5 的新版本：将旧的待审批请求标记为已被新版本替代
+			existingReq.Status = "superseded"
+			pendingChanged = true
+		}
+
+		reqID := uuid.New().String()
+		pushReq := &models.PushRequest{
+			ID:           reqID,
+			PeerID:       payload.PeerID,
+			PeerName:     payload.PeerName,
+			PeerIP:       peerIP,
+			ItemType:     payload.ItemType,
+			FileName:     cleanFileName,
+			FileSize:     payload.FileSize,
+			ContentHash:  payload.ContentHash,
+			ExistingHash: existingHash,
+			ExistingSize: existingSize,
+			HasConflict:  hasConflict,
+			Status:       "pending",
+			CreatedAt:    time.Now().Unix(),
+		}
+
 		if cfg.AutoAcceptClientPushes {
 			pushReq.Status = "accepted"
 		}
@@ -1120,85 +1374,269 @@ func (s *LanService) startHttpServer() {
 		s.mu.Unlock()
 
 		if !cfg.AutoAcceptClientPushes && s.wailsCtx != nil {
+			if pendingChanged {
+				wailsRuntime.EventsEmit(s.wailsCtx, "lan:push_requests_updated", s.GetPendingPushRequests())
+			}
 			wailsRuntime.EventsEmit(s.wailsCtx, "lan:push_request_received", pushReq)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"accepted":  pushReq.Status == "accepted",
-			"pending":   pushReq.Status == "pending",
-			"requestId": reqID,
+			"accepted":    pushReq.Status == "accepted",
+			"pending":     pushReq.Status == "pending",
+			"requestId":   reqID,
+			"hasConflict": hasConflict,
 		})
 	})
 
 	// 4. 查询推送请求审核状态
 	mux.HandleFunc("/api/lan/push-status", func(w http.ResponseWriter, r *http.Request) {
 		reqID := r.URL.Query().Get("id")
-		s.mu.RLock()
+		s.mu.Lock()
+		pendingChanged := s.pruneStalePushRequestsLocked()
 		req, exists := s.pendingPushRequests[reqID]
-		s.mu.RUnlock()
+		var reqCopy models.PushRequest
+		if exists {
+			reqCopy = *req
+		}
+		s.mu.Unlock()
+
+		if pendingChanged && s.wailsCtx != nil {
+			wailsRuntime.EventsEmit(s.wailsCtx, "lan:push_requests_updated", s.GetPendingPushRequests())
+		}
 
 		if !exists {
 			http.Error(w, "Not found", http.StatusNotFound)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(req)
+		_ = json.NewEncoder(w).Encode(reqCopy)
 	})
 
-	// 5. 客户端上传文件
+	// 5. 客户端上传文件 (流式落盘 + MD5 校验 + 自动备份 + 原子替换)
 	mux.HandleFunc("/api/lan/upload", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
-		reqID := r.FormValue("requestId")
+		reqID := r.URL.Query().Get("requestId")
+		mr, mrErr := r.MultipartReader()
+		if mrErr != nil {
+			http.Error(w, "Invalid multipart request", http.StatusBadRequest)
+			return
+		}
+
+		var claimedItemType string
+		var uploadedFilePart io.ReadCloser
+		var uploadedFileName string
+
+		for {
+			part, err := mr.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				http.Error(w, "Failed to read multipart stream", http.StatusBadRequest)
+				return
+			}
+			switch part.FormName() {
+			case "requestId":
+				b, _ := io.ReadAll(io.LimitReader(part, 128))
+				if reqID == "" {
+					reqID = strings.TrimSpace(string(b))
+				}
+				part.Close()
+			case "itemType":
+				b, _ := io.ReadAll(io.LimitReader(part, 64))
+				claimedItemType = strings.TrimSpace(string(b))
+				part.Close()
+			case "file":
+				uploadedFileName = part.FileName()
+				uploadedFilePart = part
+			default:
+				part.Close()
+			}
+			if uploadedFilePart != nil {
+				break
+			}
+		}
+
+		if uploadedFilePart == nil {
+			http.Error(w, "Missing file field", http.StatusBadRequest)
+			return
+		}
+		defer uploadedFilePart.Close()
+
 		s.mu.Lock()
 		req, exists := s.pendingPushRequests[reqID]
-		if !exists || (req.Status != "accepted" && !s.gameService.Config.LanConfig.AutoAcceptClientPushes) {
+		if !exists {
 			s.mu.Unlock()
-			http.Error(w, "Unauthorized or rejected push request", http.StatusForbidden)
+			http.Error(w, "Unauthorized or unknown push request", http.StatusForbidden)
 			return
 		}
+		if req.Status == "uploading" {
+			s.mu.Unlock()
+			http.Error(w, "Upload already in progress", http.StatusConflict)
+			return
+		}
+		if req.Status != "accepted" {
+			s.mu.Unlock()
+			http.Error(w, fmt.Sprintf("Push request status is %s", req.Status), http.StatusForbidden)
+			return
+		}
+		req.Status = "uploading"
+		expectedType := req.ItemType
+		expectedFileName := req.FileName
+		expectedHash := req.ContentHash
+		peerName := req.PeerName
 		s.mu.Unlock()
 
-		file, header, err := r.FormFile("file")
-		if err != nil {
-			http.Error(w, "Failed to read file", http.StatusBadRequest)
+		revertToAccepted := func() {
+			s.mu.Lock()
+			if rObj, ok := s.pendingPushRequests[reqID]; ok && rObj.Status == "uploading" {
+				rObj.Status = "accepted"
+			}
+			s.mu.Unlock()
+		}
+
+		if claimedItemType != "" && claimedItemType != expectedType {
+			revertToAccepted()
+			http.Error(w, "Mismatched itemType", http.StatusBadRequest)
 			return
 		}
-		defer file.Close()
 
-		fileName := filepath.Base(header.Filename)
 		gameDir := s.gameService.Config.GameDir
-		var destPath string
-		if req.ItemType == "mod" {
-			destPath = filepath.Join(gameDir, "mods", "units", fileName)
-		} else {
-			destPath = filepath.Join(gameDir, "mods", "maps", fileName)
+		targetName := expectedFileName
+		if targetName == "" {
+			targetName = uploadedFileName
 		}
-
-		out, err := os.Create(destPath)
+		destDir, destPath, err := s.resolvePushDestPath(gameDir, expectedType, targetName)
 		if err != nil {
-			http.Error(w, "Failed to write file", http.StatusInternalServerError)
+			revertToAccepted()
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		defer out.Close()
+		if err := os.MkdirAll(destDir, 0755); err != nil {
+			revertToAccepted()
+			http.Error(w, "Failed to prepare target directory", http.StatusInternalServerError)
+			return
+		}
 
-		if _, err := io.Copy(out, file); err != nil {
-			http.Error(w, "Failed to save file", http.StatusInternalServerError)
+		cleanFileName := filepath.Base(destPath)
+		tmpPath := filepath.Join(destDir, fmt.Sprintf(".%s.%s.push.tmp", cleanFileName, reqID))
+		out, err := os.Create(tmpPath)
+		if err != nil {
+			revertToAccepted()
+			http.Error(w, "Failed to create temporary file", http.StatusInternalServerError)
 			return
 		}
+
+		md5Hasher := md5.New()
+		written, copyErr := io.Copy(io.MultiWriter(out, md5Hasher), uploadedFilePart)
+		closeErr := out.Close()
+		if copyErr != nil || closeErr != nil {
+			_ = os.Remove(tmpPath)
+			revertToAccepted()
+			http.Error(w, "Failed to save uploaded file", http.StatusInternalServerError)
+			return
+		}
+
+		actualHash := hex.EncodeToString(md5Hasher.Sum(nil))
+		if expectedHash != "" && !strings.EqualFold(actualHash, expectedHash) {
+			_ = os.Remove(tmpPath)
+			revertToAccepted()
+			http.Error(w, "File MD5 checksum mismatch", http.StatusBadRequest)
+			return
+		}
+
+		// 串行化处理同名文件检测、自动备份与原子替换，防止并发写入损坏
+		s.fileWriteMu.Lock()
+		overwritten := false
+		backupCreated := false
+		if existingInfo, statErr := os.Stat(destPath); statErr == nil {
+			existingHash := CalculateContentHash(destPath, existingInfo.IsDir())
+			if existingInfo.IsDir() || existingHash == "" || !strings.EqualFold(existingHash, actualHash) {
+				backupDir := filepath.Join(gameDir, "mods", "_archived", "push_backups")
+				if mkErr := os.MkdirAll(backupDir, 0755); mkErr != nil {
+					s.fileWriteMu.Unlock()
+					_ = os.Remove(tmpPath)
+					revertToAccepted()
+					http.Error(w, "Failed to create backup directory", http.StatusInternalServerError)
+					return
+				}
+				backupName := fmt.Sprintf("%s.%s.bak", cleanFileName, time.Now().Format("20060102_150405"))
+				backupPath := filepath.Join(backupDir, backupName)
+				if mvErr := moveFileOrDir(destPath, backupPath, existingInfo.IsDir()); mvErr != nil {
+					s.fileWriteMu.Unlock()
+					_ = os.Remove(tmpPath)
+					revertToAccepted()
+					http.Error(w, "Failed to backup existing file before overwrite", http.StatusInternalServerError)
+					return
+				}
+				overwritten = true
+				backupCreated = true
+			} else {
+				_ = os.Remove(destPath)
+			}
+		}
+
+		if renErr := os.Rename(tmpPath, destPath); renErr != nil {
+			s.fileWriteMu.Unlock()
+			_ = os.Remove(tmpPath)
+			revertToAccepted()
+			http.Error(w, "Failed to finalize uploaded file", http.StatusInternalServerError)
+			return
+		}
+		s.fileWriteMu.Unlock()
+
+		// 刷新缓存与动态预设
+		cm := GetCacheManager()
+		cm.InvalidateHash(destPath)
+		if expectedType == "mod" {
+			cm.InvalidateMod(cleanFileName)
+		}
+		cm.InvalidateMapCache(destPath)
+		cm.FlushAll()
 
 		s.mu.Lock()
-		req.Status = "completed"
+		if rObj, ok := s.pendingPushRequests[reqID]; ok {
+			rObj.Status = "completed"
+			rObj.ContentHash = actualHash
+			rObj.FileSize = written
+		}
 		s.mu.Unlock()
 
 		_, _ = s.RefreshDynamicPreset()
 
+		msg := fmt.Sprintf("已接收来自 %s 的推送文件 %s", peerName, cleanFileName)
+		if overwritten {
+			msg = fmt.Sprintf("已接收 %s 推送的 %s 并覆盖旧版本（原文件已自动备份至 mods/_archived/push_backups）", peerName, cleanFileName)
+		}
+
+		if s.wailsCtx != nil {
+			wailsRuntime.EventsEmit(s.wailsCtx, "lan:push_requests_updated", s.GetPendingPushRequests())
+			wailsRuntime.EventsEmit(s.wailsCtx, "lan:push_completed", map[string]interface{}{
+				"requestId":     reqID,
+				"peerName":      peerName,
+				"itemType":      expectedType,
+				"fileName":      cleanFileName,
+				"overwritten":   overwritten,
+				"backupCreated": backupCreated,
+				"message":       msg,
+			})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("OK"))
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":       true,
+			"overwritten":   overwritten,
+			"backupCreated": backupCreated,
+			"contentHash":   actualHash,
+			"fileSize":      written,
+			"message":       msg,
+		})
 	})
 
 	// 6. 局域网应用更新元数据
@@ -1338,94 +1776,162 @@ func extractZipToDir(zipPath, destDir string) error {
 	return nil
 }
 
-func (s *LanService) uploadFileToServer(serverIP string, serverPort int, reqID, itemType, fileName, localFilePath string) error {
-	fi, err := os.Stat(localFilePath)
+// packDirToTempRwmod 将解压文件夹模组打包为临时 .rwmod 压缩文件并返回路径与体积
+func packDirToTempRwmod(dirPath string) (string, int64, error) {
+	tmpFile, err := os.CreateTemp("", "rw_push_*.rwmod")
 	if err != nil {
-		return err
+		return "", 0, fmt.Errorf("创建临时压缩文件失败: %w", err)
 	}
+	tmpPath := tmpFile.Name()
 
-	uploadPath := localFilePath
-	isTemp := false
-	if fi.IsDir() {
-		// 若为解压文件夹模组，先将其打包为临时 zip/rwmod 文件再上传
-		tmpFile, err := os.CreateTemp("", "rw_push_*.rwmod")
-		if err != nil {
-			return fmt.Errorf("创建临时压缩文件失败: %w", err)
-		}
-		tmpPath := tmpFile.Name()
-		defer func() {
-			if isTemp {
-				_ = os.Remove(tmpPath)
-			}
-		}()
-		zw := zip.NewWriter(tmpFile)
-		walkErr := filepath.Walk(localFilePath, func(p string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
-				return nil
-			}
-			rel, _ := filepath.Rel(localFilePath, p)
-			wFile, err := zw.Create(rel)
-			if err != nil {
-				return err
-			}
-			f, err := os.Open(p)
-			if err != nil {
-				return err
-			}
-			defer f.Close()
-			_, _ = io.Copy(wFile, f)
+	zw := zip.NewWriter(tmpFile)
+	walkErr := filepath.Walk(dirPath, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
 			return nil
-		})
-		_ = zw.Close()
-		_ = tmpFile.Close()
+		}
+		rel, err := filepath.Rel(dirPath, p)
+		if err != nil {
+			return err
+		}
+		wFile, err := zw.Create(filepath.ToSlash(rel))
+		if err != nil {
+			return err
+		}
+		f, err := os.Open(p)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, cpErr := io.Copy(wFile, f)
+		return cpErr
+	})
+	closeZipErr := zw.Close()
+	closeFileErr := tmpFile.Close()
+	if walkErr != nil || closeZipErr != nil || closeFileErr != nil {
+		_ = os.Remove(tmpPath)
 		if walkErr != nil {
-			return fmt.Errorf("打包目录失败: %w", walkErr)
+			return "", 0, fmt.Errorf("打包目录失败: %w", walkErr)
 		}
-		uploadPath = tmpPath
-		isTemp = true
-		if !strings.HasSuffix(strings.ToLower(fileName), ".rwmod") {
-			fileName = fileName + ".rwmod"
+		if closeZipErr != nil {
+			return "", 0, fmt.Errorf("完成压缩包失败: %w", closeZipErr)
 		}
+		return "", 0, fmt.Errorf("关闭临时压缩包失败: %w", closeFileErr)
 	}
 
+	fi, err := os.Stat(tmpPath)
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return "", 0, err
+	}
+	return tmpPath, fi.Size(), nil
+}
+
+func (s *LanService) uploadFileToServer(serverIP string, serverPort int, reqID, itemType, fileName, uploadPath string, fileSize int64, contentHash, serverName string) (*models.PushResult, error) {
 	file, err := os.Open(uploadPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer file.Close()
 
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
+	pr, pw := io.Pipe()
+	writer := multipart.NewWriter(pw)
+	contentType := writer.FormDataContentType()
 
-	part, err := writer.CreateFormFile("file", fileName)
+	go func() {
+		var writeErr error
+		defer func() {
+			if writeErr != nil {
+				_ = pw.CloseWithError(writeErr)
+			} else {
+				_ = pw.Close()
+			}
+		}()
+
+		if err := writer.WriteField("requestId", reqID); err != nil {
+			writeErr = err
+			return
+		}
+		if err := writer.WriteField("itemType", itemType); err != nil {
+			writeErr = err
+			return
+		}
+		part, err := writer.CreateFormFile("file", fileName)
+		if err != nil {
+			writeErr = err
+			return
+		}
+		if _, err := io.Copy(part, file); err != nil {
+			writeErr = err
+			return
+		}
+		if err := writer.Close(); err != nil {
+			writeErr = err
+			return
+		}
+	}()
+
+	uploadURL := fmt.Sprintf("http://%s:%d/api/lan/upload?requestId=%s", serverIP, serverPort, url.QueryEscape(reqID))
+	req, err := http.NewRequest(http.MethodPost, uploadURL, pr)
 	if err != nil {
-		return err
+		_ = pr.Close()
+		return nil, err
 	}
-	if _, err := io.Copy(part, file); err != nil {
-		return err
-	}
+	req.Header.Set("Content-Type", contentType)
 
-	_ = writer.WriteField("requestId", reqID)
-	_ = writer.WriteField("itemType", itemType)
-	_ = writer.Close()
-
-	url := fmt.Sprintf("http://%s:%d/api/lan/upload", serverIP, serverPort)
-	req, err := http.NewRequest(http.MethodPost, url, body)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: 5 * time.Minute}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		_ = pr.Close()
+		return nil, fmt.Errorf("上传文件失败: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("上传失败，服务端状态码: %d", resp.StatusCode)
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("上传失败，服务端状态码 %d: %s", resp.StatusCode, strings.TrimSpace(string(errBody)))
 	}
 
-	return nil
+	var uploadResp struct {
+		Success       bool   `json:"success"`
+		Overwritten   bool   `json:"overwritten"`
+		BackupCreated bool   `json:"backupCreated"`
+		ContentHash   string `json:"contentHash"`
+		FileSize      int64  `json:"fileSize"`
+		Message       string `json:"message"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&uploadResp)
+
+	finalHash := uploadResp.ContentHash
+	if finalHash == "" {
+		finalHash = contentHash
+	}
+	finalSize := uploadResp.FileSize
+	if finalSize <= 0 {
+		finalSize = fileSize
+	}
+	msg := uploadResp.Message
+	if msg == "" {
+		if uploadResp.Overwritten {
+			msg = fmt.Sprintf("推送成功！已覆盖更新房主同名文件 %s（旧版已自动备份）", fileName)
+		} else {
+			msg = fmt.Sprintf("推送成功！%s 已送达房主资源库", fileName)
+		}
+	}
+
+	return &models.PushResult{
+		Success:       true,
+		Status:        "completed",
+		RequestID:     reqID,
+		ItemType:      itemType,
+		FileName:      fileName,
+		FileSize:      finalSize,
+		ContentHash:   finalHash,
+		ServerName:    serverName,
+		ServerIP:      serverIP,
+		Overwritten:   uploadResp.Overwritten,
+		BackupCreated: uploadResp.BackupCreated,
+		SkippedUpload: false,
+		Message:       msg,
+		CompletedAt:   time.Now().Unix(),
+	}, nil
 }

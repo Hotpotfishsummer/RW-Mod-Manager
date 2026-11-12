@@ -7,6 +7,10 @@ export function ActivateMapParentMod(arg1:string):Promise<void>;
 
 export function AddCustomGameDir(arg1:string):Promise<models.GamePathItem>;
 
+export function ArchiveMap(arg1:string,arg2:boolean):Promise<void>;
+
+export function ArchiveMod(arg1:string,arg2:boolean):Promise<void>;
+
 export function AssetHandler():Promise<http.Handler>;
 
 export function BatchGenerateThumbnails(arg1:boolean):Promise<number>;
@@ -63,7 +67,7 @@ export function RefreshDynamicPreset():Promise<models.LaunchPreset>;
 
 export function RemoveKnownGameDir(arg1:string):Promise<Array<models.GamePathItem>>;
 
-export function RequestPushToHost(arg1:string,arg2:number,arg3:string,arg4:string):Promise<void>;
+export function RequestPushToHost(arg1:string,arg2:number,arg3:string,arg4:string):Promise<models.PushResult>;
 
 export function SaveConfig(arg1:models.AppConfig):Promise<void>;
 

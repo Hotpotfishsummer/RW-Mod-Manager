@@ -247,9 +247,12 @@ func TestPushToHostWorkflow(t *testing.T) {
 	pushModFile := filepath.Join(clientGameDir, "mods", "units", "pushed_laser_bot.rwmod")
 	createZipMod(t, pushModFile, "Laser Bot", "Client mod")
 
-	err := clientLanSvc.RequestPushToHost("127.0.0.1", serverPort, "mod", "pushed_laser_bot.rwmod")
+	resA, err := clientLanSvc.RequestPushToHost("127.0.0.1", serverPort, "mod", "pushed_laser_bot.rwmod")
 	if err != nil {
 		t.Fatalf("自动接收推送失败: %v", err)
+	}
+	if resA == nil || !resA.Success || resA.SkippedUpload || resA.Overwritten {
+		t.Fatalf("场景 A PushResult 异常: %+v", resA)
 	}
 
 	targetServerMod := filepath.Join(serverGameDir, "mods", "units", "pushed_laser_bot.rwmod")
@@ -267,7 +270,8 @@ func TestPushToHostWorkflow(t *testing.T) {
 	// 启动 goroutine 异步发起推送请求 (客户端会轮询等待)
 	pushDone := make(chan error, 1)
 	go func() {
-		pushDone <- clientLanSvc.RequestPushToHost("127.0.0.1", serverPort, "map", "secret_pass.tmx")
+		_, pushErr := clientLanSvc.RequestPushToHost("127.0.0.1", serverPort, "map", "secret_pass.tmx")
+		pushDone <- pushErr
 	}()
 
 	// 服务端等待并检测 Pending 列表
@@ -310,7 +314,8 @@ func TestPushToHostWorkflow(t *testing.T) {
 
 	rejectDone := make(chan error, 1)
 	go func() {
-		rejectDone <- clientLanSvc.RequestPushToHost("127.0.0.1", serverPort, "map", "bad_map.tmx")
+		_, rejErr := clientLanSvc.RequestPushToHost("127.0.0.1", serverPort, "map", "bad_map.tmx")
+		rejectDone <- rejErr
 	}()
 
 	var rejectPendingID string
@@ -574,4 +579,166 @@ func TestLanUDPBroadcastAndReceive(t *testing.T) {
 		t.Fatalf("告别包内容不符合预期: %+v", goodbye)
 	}
 	t.Logf("UDP 告别信标接收成功: %+v", goodbye)
+}
+
+// =========================================================================
+// 测试 5: 多次重复推送点击 & 同名不同 MD5 冲突推送处理
+// =========================================================================
+func TestPushDuplicateAndConflictHandling(t *testing.T) {
+	serverGameDir := setupMockGameDir(t, "server_dup")
+	clientGameDir := setupMockGameDir(t, "client_dup")
+
+	prefSvc := NewPrefService()
+	serverGameSvc := NewGameService()
+	serverGameSvc.Config.GameDir = serverGameDir
+	serverGameSvc.Config.LanConfig.Role = models.RoleServer
+	serverGameSvc.Config.LanConfig.InstanceID = "dup-server"
+	serverGameSvc.Config.LanConfig.DeviceName = "Dup-Server"
+	serverGameSvc.Config.LanConfig.AutoAcceptClientPushes = false
+	serverLanSvc := NewLanService(serverGameSvc, prefSvc, NewModService(prefSvc), NewMapService(prefSvc))
+	serverLanSvc.Start()
+	defer serverLanSvc.Stop()
+
+	serverPort := serverLanSvc.GetLanStatus().HttpPort
+
+	clientGameSvc := NewGameService()
+	clientGameSvc.Config.GameDir = clientGameDir
+	clientGameSvc.Config.LanConfig.Role = models.RoleClient
+	clientGameSvc.Config.LanConfig.InstanceID = "dup-client"
+	clientGameSvc.Config.LanConfig.DeviceName = "Dup-Client"
+	clientLanSvc := NewLanService(clientGameSvc, prefSvc, NewModService(prefSvc), NewMapService(prefSvc))
+	clientLanSvc.Start()
+	defer clientLanSvc.Stop()
+
+	// 1. 测试：等待审批期间多次发送相同 push-request，服务端只保留 1 条待审批请求 (去重)
+	modFile := filepath.Join(clientGameDir, "mods", "units", "dup_mod.rwmod")
+	createZipMod(t, modFile, "Dup Mod v1", "Initial version")
+	hashV1 := CalculateContentHash(modFile, false)
+
+	postPushReq := func(hash string) map[string]interface{} {
+		bodyBytes, _ := json.Marshal(map[string]interface{}{
+			"peerId":      "dup-client",
+			"peerName":    "Dup-Client",
+			"itemType":    "mod",
+			"fileName":    "dup_mod.rwmod",
+			"fileSize":    1234,
+			"contentHash": hash,
+		})
+		resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/api/lan/push-request", serverPort), "application/json", bytes.NewReader(bodyBytes))
+		if err != nil {
+			t.Fatalf("push-request 调用失败: %v", err)
+		}
+		defer resp.Body.Close()
+		var out map[string]interface{}
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return out
+	}
+
+	r1 := postPushReq(hashV1)
+	r2 := postPushReq(hashV1)
+	if r1["requestId"] != r2["requestId"] {
+		t.Fatalf("同一文件重复请求应复用同一 requestId，实际 r1=%v r2=%v", r1["requestId"], r2["requestId"])
+	}
+	if pending := serverLanSvc.GetPendingPushRequests(); len(pending) != 1 {
+		t.Fatalf("重复推送应去重只保留 1 条待审批，实际: %d", len(pending))
+	}
+
+	// 2. 测试：客户端并发防重入 (同一文件正在推送时再次调用直接返回提示)
+	// 先用另一个文件启动一个会阻塞等待审批的推送
+	inFlightMod := filepath.Join(clientGameDir, "mods", "units", "inflight.rwmod")
+	createZipMod(t, inFlightMod, "InFlight", "v1")
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := clientLanSvc.RequestPushToHost("127.0.0.1", serverPort, "mod", "inflight.rwmod")
+		firstDone <- err
+	}()
+	time.Sleep(150 * time.Millisecond)
+	_, secondErr := clientLanSvc.RequestPushToHost("127.0.0.1", serverPort, "mod", "inflight.rwmod")
+	if secondErr == nil || !strings.Contains(secondErr.Error(), "正在推送") {
+		t.Fatalf("并发重复点击同一文件应被客户端防重入拦截，实际: %v", secondErr)
+	}
+	// 拒绝 inflight 结束第一个 goroutine
+	for _, p := range serverLanSvc.GetPendingPushRequests() {
+		if p.FileName == "inflight.rwmod" {
+			_ = serverLanSvc.HandlePushDecision(p.ID, false)
+		}
+	}
+	<-firstDone
+
+	// 3. 测试：批准 dup_mod.rwmod 完成首次推送，随后再推送完全相同 MD5 -> 应直接跳过上传 (SkippedUpload = true)
+	for _, p := range serverLanSvc.GetPendingPushRequests() {
+		if p.FileName == "dup_mod.rwmod" {
+			_ = serverLanSvc.HandlePushDecision(p.ID, false) // 清理前面直调 API 留下的 pending
+		}
+	}
+	serverLanSvc.gameService.Config.LanConfig.AutoAcceptClientPushes = true
+	res1, err := clientLanSvc.RequestPushToHost("127.0.0.1", serverPort, "mod", "dup_mod.rwmod")
+	if err != nil || !res1.Success || res1.SkippedUpload {
+		t.Fatalf("首次推送 dup_mod 预期成功且非跳过，实际 err=%v res=%+v", err, res1)
+	}
+
+	res2, err := clientLanSvc.RequestPushToHost("127.0.0.1", serverPort, "mod", "dup_mod.rwmod")
+	if err != nil || !res2.Success || !res2.SkippedUpload {
+		t.Fatalf("相同文件重复推送预期 SkippedUpload=true，实际 err=%v res=%+v", err, res2)
+	}
+
+	// 4. 测试：同名但 MD5 不同的文件推送 (手动审批模式 -> 标记 HasConflict；审批通过后自动备份并覆盖更新)
+	serverLanSvc.gameService.Config.LanConfig.AutoAcceptClientPushes = false
+	createZipMod(t, modFile, "Dup Mod v2", "Modified content with different MD5")
+	hashV2 := CalculateContentHash(modFile, false)
+	if hashV2 == hashV1 {
+		t.Fatalf("修改内容后 MD5 应发生变化")
+	}
+
+	conflictDone := make(chan *models.PushResult, 1)
+	conflictErrCh := make(chan error, 1)
+	go func() {
+		res, pErr := clientLanSvc.RequestPushToHost("127.0.0.1", serverPort, "mod", "dup_mod.rwmod")
+		conflictDone <- res
+		conflictErrCh <- pErr
+	}()
+
+	var conflictReq *models.PushRequest
+	for i := 0; i < 20; i++ {
+		time.Sleep(100 * time.Millisecond)
+		for _, p := range serverLanSvc.GetPendingPushRequests() {
+			if p.FileName == "dup_mod.rwmod" {
+				pCopy := p
+				conflictReq = &pCopy
+				break
+			}
+		}
+		if conflictReq != nil {
+			break
+		}
+	}
+	if conflictReq == nil {
+		t.Fatalf("未能捕获同名冲突推送请求")
+	}
+	if !conflictReq.HasConflict || conflictReq.ExistingHash != hashV1 || conflictReq.ContentHash != hashV2 {
+		t.Fatalf("服务端未能准确识别同名不同 MD5 冲突: %+v (expected existing=%s incoming=%s)", conflictReq, hashV1, hashV2)
+	}
+
+	if err := serverLanSvc.HandlePushDecision(conflictReq.ID, true); err != nil {
+		t.Fatalf("审批覆盖推送失败: %v", err)
+	}
+
+	if pErr := <-conflictErrCh; pErr != nil {
+		t.Fatalf("冲突文件上传失败: %v", pErr)
+	}
+	conflictRes := <-conflictDone
+	if conflictRes == nil || !conflictRes.Success || !conflictRes.Overwritten || !conflictRes.BackupCreated {
+		t.Fatalf("同名覆盖推送结果应包含 Overwritten=true 与 BackupCreated=true，实际: %+v", conflictRes)
+	}
+
+	// 验证服务端文件确已更新为 v2 MD5，且原文件已备份
+	serverModPath := filepath.Join(serverGameDir, "mods", "units", "dup_mod.rwmod")
+	if gotHash := CalculateContentHash(serverModPath, false); gotHash != hashV2 {
+		t.Fatalf("覆盖后服务端文件 MD5 不一致: got %s, want %s", gotHash, hashV2)
+	}
+	backups, _ := filepath.Glob(filepath.Join(serverGameDir, "mods", "_archived", "push_backups", "dup_mod.rwmod.*.bak"))
+	if len(backups) == 0 {
+		t.Fatalf("覆盖旧版本时未生成备份文件")
+	}
+	t.Logf("多次重复推送去重 + 相同 MD5 秒跳过 + 同名不同 MD5 冲突检测与备份覆盖全链路测试通过！")
 }

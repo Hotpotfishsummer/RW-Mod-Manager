@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, onErrorCaptured } from 'vue'
 import TitleBar from './components/TitleBar.vue'
+import ImageViewerModal from './components/ImageViewerModal.vue'
+import ArchiveConfirmModal from './components/ArchiveConfirmModal.vue'
+import PushFeedbackModal from './components/PushFeedbackModal.vue'
 import {
   Package,
   Map as MapIcon,
@@ -13,6 +16,7 @@ import {
   ExternalLink,
   ShieldAlert,
   Sliders,
+  Archive,
   Users,
   Cpu,
   LayoutGrid,
@@ -51,7 +55,11 @@ import {
   ArrowUpCircle,
   Copy,
   Trash2,
-  Gamepad2
+  Gamepad2,
+  Calendar,
+  HardDrive,
+  FileText,
+  Hash
 } from 'lucide-vue-next'
 import { useApi } from './composables/useApi'
 import {
@@ -67,6 +75,7 @@ import {
   LaunchPreset,
   SyncDiff,
   PushRequest,
+  PushResult,
   UpdateInfo,
   UpdateProgress
 } from './types/api'
@@ -166,12 +175,14 @@ const pushing = ref(false)
 const pendingPushRequests = ref<PushRequest[]>([])
 const lanNoticeMsg = ref<{ type: 'success' | 'error' | 'info'; text: string } | null>(null)
 const pushModalTarget = ref<{ type: 'mod' | 'map'; name: string; size?: number } | null>(null)
+const pushResult = ref<PushResult | null>(null)
+const pushErrorMsg = ref('')
 const promptHostModal = ref(false)
 const pushHubType = ref<'mod' | 'map'>('mod')
 const pushHubTargetFile = ref<string>('')
 
 // 更新器状态
-const currentVersion = ref('1.2.3')
+const currentVersion = ref('1.2.6')
 const updateInfo = ref<UpdateInfo | null>(null)
 const updateProgress = ref<UpdateProgress | null>(null)
 const checkingUpdate = ref(false)
@@ -179,6 +190,24 @@ const updating = ref(false)
 const showUpdateModal = ref(false)
 const selectedUpdateSource = ref<'lan' | 'github'>('lan')
 const lastAutoPromptedVersion = ref<string>('')
+
+// 模组卡片点击详情弹窗状态
+const selectedModDetail = ref<ModItem | null>(null)
+function openModDetail(item: ModItem) {
+  selectedModDetail.value = item
+}
+function closeModDetail() {
+  selectedModDetail.value = null
+}
+
+function formatDate(timestamp?: number | null): string {
+  if (!timestamp) return '-'
+  const ms = timestamp > 1e11 ? timestamp : timestamp * 1000
+  const d = new Date(ms)
+  if (isNaN(d.getTime())) return '-'
+  const pad = (n: number) => n.toString().padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
 
 const presetTotalMods = computed(() => dynamicPreset.value?.mods?.length || 0)
 const presetEnabledMods = computed(() => dynamicPreset.value?.mods?.filter(m => m.enabled)?.length || 0)
@@ -226,6 +255,75 @@ const mapFilterType = ref<'all' | 'standalone' | 'pack' | 'unit_mod'>('all')
 // 地图预览模态框 (Lightbox)
 const activeMapModal = ref<MapItem | null>(null)
 const zoomLevel = ref(1)
+
+// 模组缩略图大图预览弹窗状态
+const activeModImageModal = ref<{
+  show: boolean
+  src: string
+  title: string
+  subtitle: string
+  badge?: string
+} | null>(null)
+
+function openModImageLightbox(item: ModItem) {
+  if (!item.thumbnail) return
+  activeModImageModal.value = {
+    show: true,
+    src: item.thumbnail,
+    title: item.titleZh || item.title,
+    subtitle: item.fileName,
+    badge: item.enabled ? '已启用' : '已禁用'
+  }
+}
+
+function closeModImageLightbox() {
+  activeModImageModal.value = null
+}
+
+// 归档/删除目标状态与控制
+const archiveTarget = ref<{
+  type: 'mod' | 'map' | 'pack'
+  name: string
+  title: string
+  fileSize?: number
+} | null>(null)
+const archiving = ref(false)
+
+function openArchiveModal(type: 'mod' | 'map' | 'pack', name: string, title: string, fileSize?: number) {
+  archiveTarget.value = { type, name, title, fileSize }
+}
+
+function closeArchiveModal() {
+  archiveTarget.value = null
+}
+
+async function handleConfirmArchive(permanently: boolean) {
+  if (!archiveTarget.value) return
+  const target = archiveTarget.value
+  archiving.value = true
+  try {
+    if (target.type === 'mod') {
+      await api.archiveMod(target.name, permanently)
+      showNotice(permanently ? `模组 [${target.title}] 已彻底删除` : `模组 [${target.title}] 已安全移入归档目录`, 'success')
+      if (selectedModDetail.value && selectedModDetail.value.fileName === target.name) {
+        selectedModDetail.value = null
+      }
+    } else {
+      await api.archiveMap(target.name, permanently)
+      const typeLabel = target.type === 'pack' ? '地图包' : '地图'
+      showNotice(permanently ? `${typeLabel} [${target.title}] 已彻底删除` : `${typeLabel} [${target.title}] 已安全移入归档目录`, 'success')
+      if (activeMapModal.value && (activeMapModal.value.fileName === target.name || activeMapModal.value.id === target.name || activeMapModal.value.packName === target.name)) {
+        activeMapModal.value = null
+      }
+    }
+    archiveTarget.value = null
+    await loadAllData()
+  } catch (err) {
+    showNotice(`归档操作失败: ${err}`, 'error')
+  } finally {
+    archiving.value = false
+  }
+}
 
 // 格式化文件大小 (添加健壮防空指针与越界保护)
 function formatBytes(bytes?: number | null) {
@@ -752,29 +850,56 @@ async function handleSyncFromHost() {
 
 // 打开推送弹窗
 function openPushModal(type: 'mod' | 'map', name: string, size?: number) {
+  if (pushing.value) {
+    showNotice('当前已有推送任务正在进行中，请等待完成后再操作', 'info')
+    return
+  }
   if (!lanStatus.value.activeServer) {
     showNotice('未找到房主服务端，无法发起推送！请等待局域网房主启动上线', 'error')
     return
   }
+  pushResult.value = null
+  pushErrorMsg.value = ''
   pushModalTarget.value = { type, name, size }
+}
+
+// 关闭推送弹窗与结果页
+function closePushModal() {
+  if (pushing.value) return
+  pushModalTarget.value = null
+  pushResult.value = null
+  pushErrorMsg.value = ''
+}
+
+// 从推送成功反馈页跳转至联机预设面板
+function handlePushGoLan() {
+  closePushModal()
+  currentTab.value = 'lan'
+  pollLanStatus()
 }
 
 // 确认发起推送
 async function confirmPushToHost() {
-  if (!pushModalTarget.value || !lanStatus.value.activeServer) return
+  if (pushing.value || !pushModalTarget.value || !lanStatus.value.activeServer) return
   pushing.value = true
+  pushErrorMsg.value = ''
+  pushResult.value = null
   const target = pushModalTarget.value
   try {
-    await api.requestPushToHost(
+    const res = await api.requestPushToHost(
       lanStatus.value.activeServer.ip,
       lanStatus.value.activeServer.httpPort,
       target.type,
       target.name
     )
-    showNotice(`成功推送 ${target.name} 至房主！`)
+    pushResult.value = res
     pushModalTarget.value = null
+    showNotice(res?.message || `成功推送 ${target.name} 至房主！`, res?.overwritten ? 'info' : 'success')
+    await pollLanStatus()
   } catch (err) {
-    showNotice(`推送失败: ${err}`, 'error')
+    const errText = err instanceof Error ? err.message : String(err)
+    pushErrorMsg.value = errText
+    showNotice(`推送失败: ${errText}`, 'error')
   } finally {
     pushing.value = false
   }
@@ -839,15 +964,36 @@ async function handlePushHubSend() {
     showNotice('请先在下拉列表中选择要推送的文件！', 'error')
     return
   }
+  let targetType: 'mod' | 'map' = pushHubType.value
+  let targetName = pushHubTargetFile.value
   let size = 0
+
   if (pushHubType.value === 'mod') {
     const item = mods.value.find(m => m.fileName === pushHubTargetFile.value)
-    if (item) size = item.fileSize
+    if (item) {
+      targetName = item.fileName
+      size = item.fileSize
+    }
   } else {
-    const item = maps.value.find(m => m.fileName === pushHubTargetFile.value || m.id === pushHubTargetFile.value)
-    if (item) size = item.fileSize
+    const item = maps.value.find(m => m.id === pushHubTargetFile.value || m.fileName === pushHubTargetFile.value)
+    if (item) {
+      if (item.locationType === 'unit_mod' && item.parentModFile) {
+        targetType = 'mod'
+        targetName = item.parentModFile
+        const parentMod = mods.value.find(m => m.fileName === item.parentModFile)
+        size = parentMod ? parentMod.fileSize : item.fileSize
+      } else if (item.locationType === 'map_pack' && item.packName) {
+        targetType = 'map'
+        targetName = item.packName
+        size = item.fileSize
+      } else {
+        targetType = 'map'
+        targetName = item.fileName
+        size = item.fileSize
+      }
+    }
   }
-  openPushModal(pushHubType.value, pushHubTargetFile.value, size)
+  openPushModal(targetType, targetName, size)
 }
 
 // 单机模式启动游戏 (独立运行，不检查联机冲突)
@@ -1158,6 +1304,16 @@ const handleClose = () => {
 onMounted(() => {
   checkWindowState()
   window.addEventListener('resize', checkWindowState)
+  // 监听全局按键 (Esc 关闭详情弹窗与下拉菜单)
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (selectedModDetail.value) {
+        closeModDetail()
+      } else if (showThemeMenu.value) {
+        showThemeMenu.value = false
+      }
+    }
+  })
   // 初始化主题设置与系统深浅色偏好监听
   try {
     const savedTheme = (localStorage.getItem('rw_theme_mode') as ThemeMode) || 'auto'
@@ -1223,8 +1379,21 @@ onMounted(() => {
     })
     runtime.EventsOn('lan:push_request_received', (req: PushRequest) => {
       if (!pendingPushRequests.value) pendingPushRequests.value = []
-      pendingPushRequests.value.push(req)
-      showNotice(`收到来自 ${req.peerName} 的模组推送请求`, 'info')
+      const existsIdx = pendingPushRequests.value.findIndex(r => r.id === req.id)
+      if (existsIdx >= 0) {
+        pendingPushRequests.value[existsIdx] = req
+      } else {
+        pendingPushRequests.value.unshift(req)
+      }
+      const conflictHint = req.hasConflict ? '（同名冲突：MD5 不同，接受将自动备份并覆盖）' : ''
+      showNotice(`收到来自 ${req.peerName} 的${req.itemType === 'mod' ? '模组' : '地图'}推送请求: ${req.fileName} ${conflictHint}`, req.hasConflict ? 'error' : 'info')
+    })
+    runtime.EventsOn('lan:push_completed', (info: { fileName?: string; overwritten?: boolean; message?: string }) => {
+      if (info?.message) {
+        showNotice(info.message, info.overwritten ? 'info' : 'success')
+      }
+      loadAllData()
+      pollLanStatus()
     })
     runtime.EventsOn('update:progress', (p: UpdateProgress) => {
       updateProgress.value = p
@@ -1262,7 +1431,7 @@ onUnmounted(() => {
     />
 
     <!-- 顶部导航栏 (Material Design 3 Top App Bar) -->
-    <header class="wails-draggable flex items-center justify-between px-3 sm:px-6 py-2.5 bg-m3-surface-low border-b border-m3-outline-variant shrink-0 gap-2 sm:gap-4 overflow-hidden">
+    <header class="wails-draggable relative z-30 flex items-center justify-between px-3 sm:px-6 py-2.5 bg-m3-surface-low border-b border-m3-outline-variant shrink-0 gap-2 sm:gap-4">
       <!-- 左侧：品牌信息与全局连接状态 (纯展示与导航，小窗口时优先隐藏文字以保障右侧操作按钮完整展示) -->
       <div class="flex items-center gap-2 sm:gap-3.5 min-w-0 shrink">
         <!-- Logo 与标题 -->
@@ -1415,10 +1584,10 @@ onUnmounted(() => {
           <!-- 遮罩 (点击其他区域关闭菜单) -->
           <div v-if="showThemeMenu" @click="showThemeMenu = false" class="fixed inset-0 z-40" />
 
-          <!-- 下拉菜单浮层 -->
+          <!-- 下拉菜单浮层 (M3 Dropdown Menu) -->
           <div
             v-if="showThemeMenu"
-            class="absolute right-0 mt-1.5 w-36 py-1 bg-m3-surface-container border border-m3-outline rounded-xl shadow-m3-2 z-50 overflow-hidden text-xs"
+            class="absolute right-0 mt-2 w-36 py-1 bg-m3-surface-container border border-m3-outline rounded-xl shadow-m3-3 z-50 overflow-hidden text-xs wails-no-drag animate-in fade-in zoom-in-95 duration-150"
           >
             <button
               @click="applyTheme('light'); showThemeMenu = false"
@@ -1741,8 +1910,9 @@ onUnmounted(() => {
             <div
               v-for="item in filteredMods"
               :key="item.fileName"
-              class="group flex flex-col bg-m3-surface-container border rounded-2xl overflow-hidden transition-all duration-200"
-              :class="item.enabled ? 'border-m3-outline-variant hover:border-m3-outline hover:bg-m3-surface-high hover:shadow-m3-1' : 'border-m3-outline-variant/60 opacity-75 hover:opacity-100 hover:bg-m3-surface-high'"
+              @click="openModDetail(item)"
+              class="group flex flex-col bg-m3-surface-container border rounded-2xl overflow-hidden transition-all duration-200 cursor-pointer select-none active:scale-[0.99] hover:shadow-m3-2"
+              :class="item.enabled ? 'border-m3-outline-variant hover:border-m3-outline hover:bg-m3-surface-high' : 'border-m3-outline-variant/60 opacity-75 hover:opacity-100 hover:bg-m3-surface-high'"
             >
               <!-- 封面图 -->
               <div class="relative h-36 bg-m3-surface-dim overflow-hidden shrink-0 flex items-center justify-center border-b border-m3-outline-variant">
@@ -1760,8 +1930,14 @@ onUnmounted(() => {
                   <span class="text-[10px] font-mono font-semibold tracking-wider">NO THUMBNAIL</span>
                 </div>
 
+                <!-- 鼠标悬停查看详情提示遮罩 (M3 Hover Overlay) -->
+                <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center gap-1.5 text-white text-xs font-medium pointer-events-none backdrop-blur-[1px]">
+                  <Eye class="w-4 h-4" />
+                  <span>点击查看详情</span>
+                </div>
+
                 <!-- 启/禁用状态胶囊 (M3 Status Badge) -->
-                <div class="absolute top-2.5 left-2.5">
+                <div class="absolute top-2.5 left-2.5 z-10">
                   <span
                     class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium backdrop-blur-md shadow-sm"
                     :class="item.enabled ? 'bg-m3-success-container/95 text-m3-on-success-container border border-m3-success/30' : 'bg-m3-surface-highest/95 text-m3-on-surface-variant border border-m3-outline'"
@@ -1772,7 +1948,7 @@ onUnmounted(() => {
                 </div>
 
                 <!-- 版本号徽章 -->
-                <div v-if="item.minVersion" class="absolute top-2.5 right-2.5">
+                <div v-if="item.minVersion" class="absolute top-2.5 right-2.5 z-10">
                   <span class="px-2 py-0.5 rounded-md text-[10px] font-mono font-medium bg-black/70 backdrop-blur-md text-m3-on-surface-variant border border-white/10 shadow-sm">
                     {{ item.minVersion }}
                   </span>
@@ -1826,7 +2002,7 @@ onUnmounted(() => {
                     <!-- 客户端向房主推送此模组 -->
                     <button
                       v-if="lanStatus.role === 'client'"
-                      @click="openPushModal('mod', item.fileName, item.fileSize)"
+                      @click.stop="openPushModal('mod', item.fileName, item.fileSize)"
                       class="px-2.5 py-1 rounded-lg text-xs font-medium border border-m3-outline bg-m3-surface-highest/60 hover:bg-m3-surface-highest text-m3-on-surface-variant hover:text-m3-on-surface transition flex items-center gap-1"
                       :title="lanStatus.activeServer ? '将此模组推送给房主服务端' : '向房主推送此模组 (待房主上线)'"
                     >
@@ -1836,16 +2012,25 @@ onUnmounted(() => {
 
                     <button
                       v-if="item.steamId"
-                      @click="openWorkshopLink(item.steamId)"
+                      @click.stop="openWorkshopLink(item.steamId)"
                       class="p-1.5 text-m3-on-surface-dim hover:text-m3-primary rounded-lg transition"
                       title="在 Steam 创意工坊查看"
                     >
                       <ExternalLink class="w-4 h-4" />
                     </button>
 
+                    <!-- 归档/删除模组 -->
+                    <button
+                      @click.stop="openArchiveModal('mod', item.fileName, item.titleZh || item.title, item.fileSize)"
+                      class="p-1.5 text-m3-on-surface-dim hover:text-m3-error rounded-lg hover:bg-m3-error-container/20 transition"
+                      title="归档/删除此模组"
+                    >
+                      <Archive class="w-4 h-4" />
+                    </button>
+
                     <!-- M3 Switch 开关 -->
                     <button
-                      @click="handleToggleMod(item)"
+                      @click.stop="handleToggleMod(item)"
                       class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
                       :class="item.enabled ? 'bg-m3-primary' : 'bg-m3-surface-highest border border-m3-outline'"
                     >
@@ -1872,13 +2057,14 @@ onUnmounted(() => {
             <div
               v-for="item in filteredMods"
               :key="item.fileName"
-              class="flex items-center justify-between p-3 bg-m3-surface-container border border-m3-outline-variant hover:border-m3-outline rounded-xl transition shadow-sm"
+              @click="openModDetail(item)"
+              class="group flex items-center justify-between p-3 bg-m3-surface-container border border-m3-outline-variant hover:border-m3-outline rounded-xl transition shadow-sm cursor-pointer hover:bg-m3-surface-high active:scale-[0.99] select-none"
               :class="item.enabled ? 'bg-m3-surface-container' : 'opacity-70 hover:opacity-90'"
             >
               <!-- 左侧：开关 + 缩略图 + 标题与标签 -->
               <div class="flex items-center gap-3.5 flex-1 min-w-0 pr-4">
                 <button
-                  @click="handleToggleMod(item)"
+                  @click.stop="handleToggleMod(item)"
                   class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
                   :class="item.enabled ? 'bg-m3-primary' : 'bg-m3-surface-highest border border-m3-outline'"
                 >
@@ -1895,7 +2081,7 @@ onUnmounted(() => {
 
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center gap-2">
-                    <h3 class="text-xs font-semibold text-m3-on-surface truncate" :title="item.titleZh || item.title">
+                    <h3 class="text-xs font-semibold text-m3-on-surface truncate group-hover:text-m3-primary transition" :title="item.titleZh || item.title">
                       {{ item.titleZh || item.title }}
                     </h3>
                     <span v-if="item.minVersion" class="px-1.5 py-0.2 rounded text-[10px] font-mono bg-m3-surface-highest text-m3-on-surface-variant border border-m3-outline-variant">
@@ -1941,7 +2127,7 @@ onUnmounted(() => {
                 <!-- 客户端向房主推送此模组 -->
                 <button
                   v-if="lanStatus.role === 'client'"
-                  @click="openPushModal('mod', item.fileName, item.fileSize)"
+                  @click.stop="openPushModal('mod', item.fileName, item.fileSize)"
                   class="px-2.5 py-1 rounded-lg text-xs font-medium border border-m3-outline bg-m3-surface-highest/60 hover:bg-m3-surface-highest text-m3-on-surface-variant hover:text-m3-on-surface transition flex items-center gap-1"
                   :title="lanStatus.activeServer ? '将此模组推送给房主服务端' : '向房主推送此模组 (待房主上线)'"
                 >
@@ -1950,11 +2136,19 @@ onUnmounted(() => {
                 </button>
                 <button
                   v-if="item.steamId"
-                  @click="openWorkshopLink(item.steamId)"
+                  @click.stop="openWorkshopLink(item.steamId)"
                   class="p-1.5 text-m3-on-surface-dim hover:text-m3-primary rounded-lg transition"
                   title="在 Steam 创意工坊查看"
                 >
                   <ExternalLink class="w-4 h-4" />
+                </button>
+                <!-- 归档/删除模组 -->
+                <button
+                  @click.stop="openArchiveModal('mod', item.fileName, item.titleZh || item.title, item.fileSize)"
+                  class="p-1.5 text-m3-on-surface-dim hover:text-m3-error rounded-lg hover:bg-m3-error-container/20 transition"
+                  title="归档/删除此模组"
+                >
+                  <Archive class="w-4 h-4" />
                 </button>
               </div>
             </div>
@@ -2200,6 +2394,13 @@ onUnmounted(() => {
                         <span class="text-m3-success text-[10px] font-medium flex items-center gap-1">
                           <Check class="w-3 h-3" /> 就绪
                         </span>
+                        <button
+                          @click.stop="openArchiveModal('map', m.fileName, m.title, m.fileSize)"
+                          class="p-1 text-m3-on-surface-dim hover:text-m3-error rounded hover:bg-m3-error-container/20 transition"
+                          title="归档/删除此独立地图"
+                        >
+                          <Archive class="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -2264,6 +2465,15 @@ onUnmounted(() => {
                     >
                       <UploadCloud class="w-3.5 h-3.5" />
                       <span>推送此包</span>
+                    </button>
+                    <!-- 归档整张地图包 -->
+                    <button
+                      @click.stop="openArchiveModal('pack', pack.packName, pack.packName, pack.size)"
+                      class="px-2.5 py-1 rounded-lg text-xs font-medium border border-m3-error/30 bg-m3-error-container/20 hover:bg-m3-error-container/40 text-m3-error transition flex items-center gap-1.5"
+                      title="归档移出或删除整张地图包"
+                    >
+                      <Archive class="w-3.5 h-3.5" />
+                      <span>归档此包</span>
                     </button>
                   </div>
                 </div>
@@ -2550,136 +2760,86 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- 3. 地图大图放大查看器 (Lightbox Modal - M3 Dialog) -->
-        <div
-          v-if="activeMapModal"
-          class="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-6 animate-fade-in"
-          @click.self="closeMapLightbox"
+        <!-- 3. 地图大图高级交互查看器 (ImageViewerModal) -->
+        <ImageViewerModal
+          :show="!!activeMapModal"
+          :src="activeMapModal?.hasPreview ? activeMapModal.previewData : ''"
+          :has-image="!!(activeMapModal?.hasPreview && activeMapModal?.previewData)"
+          :title="activeMapModal?.title"
+          :subtitle="activeMapModal?.fileName"
+          :badge="activeMapModal ? (activeMapModal.active ? '战局可用' : '未激活 (宿主模组已禁用)') : ''"
+          :badge-active="activeMapModal?.active"
+          empty-text="该地图尚未生成带出生点的高清预览图"
+          @close="closeMapLightbox"
+          @empty-action="activeMapModal && handleGenerateMapThumb(activeMapModal)"
         >
-          <div class="bg-m3-surface-container border border-m3-outline rounded-3xl max-w-4xl w-full max-h-[92vh] flex flex-col shadow-m3-3 overflow-hidden">
-            <!-- 弹窗标题栏 -->
-            <div class="flex items-center justify-between px-6 py-4 border-b border-m3-outline-variant bg-m3-surface-high">
-              <div class="flex items-center gap-3">
-                <div class="w-8 h-8 rounded-xl bg-m3-primary-container text-m3-primary flex items-center justify-center">
-                  <MapIcon class="w-4 h-4 text-m3-on-primary-container" />
-                </div>
-                <div>
-                  <h3 class="text-sm font-bold text-m3-on-surface flex items-center gap-2">
-                    {{ activeMapModal.title }}
-                    <span
-                      class="px-2 py-0.5 rounded-full text-[11px] font-medium"
-                      :class="activeMapModal.active ? 'bg-m3-success-container text-m3-on-success-container' : 'bg-m3-surface-highest text-m3-on-surface-dim'"
-                    >
-                      {{ activeMapModal.active ? '战局可用' : '未激活 (宿主模组已禁用)' }}
-                    </span>
-                  </h3>
-                  <p class="text-[11px] text-m3-on-surface-dim font-mono mt-0.5">
-                    {{ activeMapModal.fileName }}
-                  </p>
-                </div>
-              </div>
+          <template #header-icon>
+            <div class="w-8 h-8 rounded-xl bg-m3-primary-container text-m3-primary flex items-center justify-center shrink-0">
+              <MapIcon class="w-4 h-4 text-m3-on-primary-container" />
+            </div>
+          </template>
 
-              <!-- 缩放控制与关闭 (M3 Icon Buttons) -->
-              <div class="flex items-center gap-1.5">
-                <button
-                  @click="zoomLevel = Math.max(0.5, zoomLevel - 0.25)"
-                  class="p-2 rounded-xl bg-m3-surface-container hover:bg-m3-surface-highest text-m3-on-surface-variant transition border border-m3-outline"
-                  title="缩小"
-                >
-                  <ZoomOut class="w-4 h-4" />
-                </button>
-                <span class="text-xs font-mono text-m3-on-surface-variant w-12 text-center">
-                  {{ Math.round(zoomLevel * 100) }}%
-                </span>
-                <button
-                  @click="zoomLevel = Math.min(3, zoomLevel + 0.25)"
-                  class="p-2 rounded-xl bg-m3-surface-container hover:bg-m3-surface-highest text-m3-on-surface-variant transition border border-m3-outline"
-                  title="放大"
-                >
-                  <ZoomIn class="w-4 h-4" />
-                </button>
-                <button
-                  @click="zoomLevel = 1"
-                  class="p-2 rounded-xl bg-m3-surface-container hover:bg-m3-surface-highest text-m3-on-surface-variant transition border border-m3-outline"
-                  title="重置 1:1"
-                >
-                  <Maximize2 class="w-4 h-4" />
-                </button>
-                <div class="h-4 w-px bg-m3-outline mx-1" />
-                <button
-                  @click="closeMapLightbox"
-                  class="p-2 rounded-xl bg-m3-surface-container hover:bg-m3-error-container hover:text-m3-on-error-container text-m3-on-surface-variant transition border border-m3-outline"
-                  title="关闭"
-                >
-                  <X class="w-4 h-4" />
-                </button>
-              </div>
+          <template #empty-action>
+            <button
+              v-if="activeMapModal"
+              @click="handleGenerateMapThumb(activeMapModal)"
+              :disabled="generatingThumb"
+              class="flex items-center gap-2 px-4 py-2 bg-m3-primary hover:bg-m3-primary-hover text-white rounded-xl text-xs font-medium shadow-m3-1 transition disabled:opacity-40"
+            >
+              <Sparkles class="w-4 h-4" :class="{ 'animate-spin': generatingThumb }" />
+              <span>渲染高清缩略图与队伍出生点标记</span>
+            </button>
+          </template>
+
+          <template #footer>
+            <div v-if="activeMapModal" class="flex items-center gap-5 text-m3-on-surface-variant font-mono">
+              <span class="flex items-center gap-1.5 text-m3-success font-medium">
+                <Users class="w-4 h-4" />
+                {{ activeMapModal.playerCount }} 名玩家 (出生点 1~{{ activeMapModal.playerCount }})
+              </span>
+              <span v-if="activeMapModal.width > 0">
+                瓦片: {{ activeMapModal.width }} × {{ activeMapModal.height }}
+              </span>
+              <span v-if="activeMapModal.packName" class="text-m3-primary">
+                包: {{ activeMapModal.packName }}
+              </span>
+              <span>
+                大小: {{ formatBytes(activeMapModal.fileSize) }}
+              </span>
             </div>
 
-            <!-- 图像展示区域 -->
-            <div class="flex-1 overflow-auto bg-m3-surface-dim p-6 flex items-center justify-center min-h-[420px] max-h-[560px]">
-              <div v-if="activeMapModal.hasPreview && activeMapModal.previewData" class="transition-transform duration-150">
-                <img
-                  :src="activeMapModal.previewData"
-                  :style="{ transform: `scale(${zoomLevel})` }"
-                  class="max-h-[500px] object-contain rounded-xl shadow-m3-2 origin-center transition-transform"
-                  alt="High-Res Map Preview"
-                />
-              </div>
-              <div v-else class="flex flex-col items-center justify-center text-m3-warning gap-3">
-                <ShieldAlert class="w-14 h-14 stroke-[1.2]" />
-                <p class="text-xs font-medium">该地图尚未生成带出生点的高清预览图</p>
-                <button
-                  @click="handleGenerateMapThumb(activeMapModal)"
-                  :disabled="generatingThumb"
-                  class="flex items-center gap-2 px-4 py-2 bg-m3-primary hover:bg-m3-primary-hover text-white rounded-xl text-xs font-medium shadow-m3-1 transition disabled:opacity-40"
-                >
-                  <Sparkles class="w-4 h-4" :class="{ 'animate-spin': generatingThumb }" />
-                  <span>渲染高清缩略图与队伍出生点标记</span>
-                </button>
-              </div>
+            <div v-if="activeMapModal" class="flex items-center gap-2.5">
+              <button
+                v-if="!activeMapModal.active && activeMapModal.parentModFile"
+                @click="handleActivateParentMod(activeMapModal.parentModFile)"
+                class="px-4 py-2 bg-m3-primary-container hover:bg-m3-primary text-m3-on-primary-container hover:text-white rounded-xl font-medium transition"
+              >
+                激活宿主模组
+              </button>
+
+              <button
+                @click="handleGenerateMapThumb(activeMapModal)"
+                :disabled="generatingThumb"
+                class="flex items-center gap-1.5 px-4 py-2 bg-m3-surface-container hover:bg-m3-surface-highest text-m3-primary border border-m3-outline rounded-xl font-medium transition disabled:opacity-40"
+                title="使用精确出生点算法重新渲染并保存"
+              >
+                <Sparkles class="w-4 h-4" :class="{ 'animate-spin': generatingThumb }" />
+                <span>重绘出生点</span>
+              </button>
+
+              <!-- 归档地图操作 -->
+              <button
+                v-if="activeMapModal.locationType !== 'unit_mod'"
+                @click="openArchiveModal(activeMapModal.locationType === 'map_pack' ? 'pack' : 'map', activeMapModal.locationType === 'map_pack' ? activeMapModal.packName : activeMapModal.fileName, activeMapModal.title, activeMapModal.fileSize)"
+                class="flex items-center gap-1.5 px-4 py-2 bg-m3-error-container/20 hover:bg-m3-error-container/40 text-m3-error border border-m3-error/30 rounded-xl font-medium transition"
+                title="归档移出或删除此地图"
+              >
+                <Archive class="w-4 h-4" />
+                <span>归档此{{ activeMapModal.locationType === 'map_pack' ? '地图包' : '地图' }}</span>
+              </button>
             </div>
-
-            <!-- 底部地图详情与动作栏 -->
-            <div class="px-6 py-4 bg-m3-surface-high border-t border-m3-outline-variant flex flex-wrap items-center justify-between gap-4 text-xs">
-              <div class="flex items-center gap-5 text-m3-on-surface-variant font-mono">
-                <span class="flex items-center gap-1.5 text-m3-success font-medium">
-                  <Users class="w-4 h-4" />
-                  {{ activeMapModal.playerCount }} 名玩家 (出生点 1~{{ activeMapModal.playerCount }})
-                </span>
-                <span v-if="activeMapModal.width > 0">
-                  瓦片: {{ activeMapModal.width }} × {{ activeMapModal.height }}
-                </span>
-                <span v-if="activeMapModal.packName" class="text-m3-primary">
-                  包: {{ activeMapModal.packName }}
-                </span>
-                <span>
-                  大小: {{ formatBytes(activeMapModal.fileSize) }}
-                </span>
-              </div>
-
-              <div class="flex items-center gap-2.5">
-                <button
-                  v-if="!activeMapModal.active && activeMapModal.parentModFile"
-                  @click="handleActivateParentMod(activeMapModal.parentModFile)"
-                  class="px-4 py-2 bg-m3-primary-container hover:bg-m3-primary text-m3-on-primary-container hover:text-white rounded-xl font-medium transition"
-                >
-                  激活宿主模组
-                </button>
-
-                <button
-                  @click="handleGenerateMapThumb(activeMapModal)"
-                  :disabled="generatingThumb"
-                  class="flex items-center gap-1.5 px-4 py-2 bg-m3-surface-container hover:bg-m3-surface-highest text-m3-primary border border-m3-outline rounded-xl font-medium transition disabled:opacity-40"
-                  title="使用精确出生点算法重新渲染并保存"
-                >
-                  <Sparkles class="w-4 h-4" />
-                  <span>重绘出生点</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+          </template>
+        </ImageViewerModal>
       </section>
 
       <!-- 局域网联机与模组预设同步 Tab (M3 Cards & Data Layout) -->
@@ -2911,33 +3071,46 @@ onUnmounted(() => {
                       暂无队员发起模组或地图推送请求
                     </div>
 
-                    <div v-else class="space-y-2 max-h-40 overflow-y-auto">
+                    <div v-else class="space-y-2 max-h-52 overflow-y-auto">
                       <div
                         v-for="req in (pendingPushRequests || [])"
                         :key="req.id"
-                        class="p-2.5 bg-m3-surface-container border border-m3-outline-variant rounded-xl flex items-center justify-between text-xs"
+                        class="p-2.5 bg-m3-surface-container border rounded-xl space-y-2 text-xs"
+                        :class="req.hasConflict ? 'border-m3-warning/60 bg-m3-warning-container/10' : 'border-m3-outline-variant'"
                       >
-                        <div class="min-w-0 pr-2 font-mono">
-                          <div class="text-m3-on-surface font-medium truncate">
-                            {{ req.peerName }} 请求推送 {{ req.itemType === 'mod' ? '模组' : '地图' }}
+                        <div class="flex items-center justify-between gap-2">
+                          <div class="min-w-0 pr-2 font-mono">
+                            <div class="text-m3-on-surface font-medium truncate flex items-center gap-1.5">
+                              <span>{{ req.peerName }} 请求推送 {{ req.itemType === 'mod' ? '模组' : '地图' }}</span>
+                              <span v-if="req.peerIp" class="text-[10px] text-m3-on-surface-dim font-normal">({{ req.peerIp }})</span>
+                            </div>
+                            <div class="text-m3-on-surface-dim text-[11px] truncate">
+                              {{ req.fileName }} ({{ formatBytes(req.fileSize) }})
+                              <span v-if="req.contentHash" class="ml-1 text-[10px] text-m3-primary">MD5: {{ req.contentHash.slice(0, 8) }}</span>
+                            </div>
                           </div>
-                          <div class="text-m3-on-surface-dim text-[11px] truncate">
-                            {{ req.fileName }} ({{ formatBytes(req.fileSize) }})
+                          <div class="flex items-center gap-1.5 shrink-0">
+                            <button
+                              @click="handlePushDecision(req.id, true)"
+                              class="px-2.5 py-1 rounded-lg text-[11px] font-medium transition hover:brightness-110 border"
+                              :class="req.hasConflict ? 'bg-m3-warning-container text-m3-on-warning-container border-m3-warning/50' : 'bg-m3-success-container text-m3-on-success-container border-m3-success/40'"
+                            >
+                              {{ req.hasConflict ? '备份并覆盖' : '接受' }}
+                            </button>
+                            <button
+                              @click="handlePushDecision(req.id, false)"
+                              class="px-2.5 py-1 bg-m3-error-container text-m3-on-error-container border border-m3-error/40 rounded-lg text-[11px] font-medium transition hover:brightness-110"
+                            >
+                              拒绝
+                            </button>
                           </div>
                         </div>
-                        <div class="flex items-center gap-1.5 shrink-0">
-                          <button
-                            @click="handlePushDecision(req.id, true)"
-                            class="px-2.5 py-1 bg-m3-success-container text-m3-on-success-container border border-m3-success/40 rounded-lg text-[11px] font-medium transition hover:brightness-110"
-                          >
-                            接受
-                          </button>
-                          <button
-                            @click="handlePushDecision(req.id, false)"
-                            class="px-2.5 py-1 bg-m3-error-container text-m3-on-error-container border border-m3-error/40 rounded-lg text-[11px] font-medium transition hover:brightness-110"
-                          >
-                            拒绝
-                          </button>
+
+                        <div
+                          v-if="req.hasConflict"
+                          class="px-2.5 py-1.5 rounded-lg bg-m3-warning-container/25 border border-m3-warning/40 text-[10px] text-m3-warning font-mono leading-snug"
+                        >
+                          ⚠️ 同名文件冲突 (MD5 不一致)：本机已有同名文件 ({{ formatBytes(req.existingSize) }} · {{ (req.existingHash || '').slice(0, 8) }})，接收将自动备份旧版并覆盖！
                         </div>
                       </div>
                     </div>
@@ -4046,53 +4219,17 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 2. 客户端向房主推送模组/地图确认弹窗 (M3 Confirmation Dialog) -->
-    <div
-      v-if="pushModalTarget"
-      class="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-6"
-    >
-      <div class="bg-m3-surface-container border border-m3-outline rounded-3xl max-w-md w-full p-6 shadow-m3-3 space-y-4">
-        <div class="flex items-center justify-between border-b border-m3-outline-variant pb-3">
-          <div class="flex items-center gap-2.5">
-            <UploadCloud class="w-5 h-5 text-m3-primary" />
-            <h3 class="text-sm font-bold text-m3-on-surface">
-              推送{{ pushModalTarget.type === 'mod' ? '模组' : '地图' }}至房主
-            </h3>
-          </div>
-          <button @click="pushModalTarget = null" class="text-m3-on-surface-dim hover:text-m3-on-surface">
-            <X class="w-4 h-4" />
-          </button>
-        </div>
-
-        <div class="space-y-3 text-xs">
-          <div class="p-3 bg-m3-surface-high border border-m3-outline-variant rounded-xl space-y-1.5 font-mono">
-            <div class="text-m3-on-surface-variant">文件名称：<span class="text-m3-primary font-bold">{{ pushModalTarget.name }}</span></div>
-            <div v-if="pushModalTarget.size" class="text-m3-on-surface-variant">文件大小：<span class="text-m3-on-surface">{{ formatBytes(pushModalTarget.size) }}</span></div>
-            <div class="text-m3-on-surface-variant">目标房主：<span class="text-m3-success font-medium">{{ lanStatus.activeServer?.deviceName || '房主主机' }} ({{ lanStatus.activeServer?.ip }})</span></div>
-          </div>
-          <p class="text-m3-on-surface-dim leading-relaxed">
-            推送发起后，文件将发送至房主服务端；若房主开启了自动接收将直接入库，否则需房主审批。
-          </p>
-        </div>
-
-        <div class="flex items-center justify-end gap-2.5 pt-2">
-          <button
-            @click="pushModalTarget = null"
-            class="px-4 py-2 bg-m3-surface-high hover:bg-m3-surface-highest text-m3-on-surface-variant hover:text-m3-on-surface rounded-xl text-xs border border-m3-outline transition"
-          >
-            取消
-          </button>
-          <button
-            @click="confirmPushToHost"
-            :disabled="pushing"
-            class="px-5 py-2 bg-m3-primary hover:bg-m3-primary-hover text-white font-semibold rounded-xl text-xs flex items-center gap-2 shadow-m3-1 disabled:opacity-40"
-          >
-            <UploadCloud class="w-4 h-4" :class="{ 'animate-bounce': pushing }" />
-            <span>{{ pushing ? '传输中/等待审批...' : '确认推送' }}</span>
-          </button>
-        </div>
-      </div>
-    </div>
+    <!-- 2. 客户端向房主推送模组/地图确认与推送成功反馈页面 -->
+    <PushFeedbackModal
+      :target="pushModalTarget"
+      :active-server="lanStatus.activeServer"
+      :pushing="pushing"
+      :result="pushResult"
+      :error-msg="pushErrorMsg"
+      @confirm="confirmPushToHost"
+      @close="closePushModal"
+      @go-lan="handlePushGoLan"
+    />
 
     <!-- 3. 客户端无房主启动引导弹窗 (M3 Confirmation Dialog) -->
     <div
@@ -4263,7 +4400,257 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 6. 游戏路径自动探测与选择切换模态框 (类似 L4D2 VPK Manager) -->
+    <!-- 6. 模组详细信息展示弹窗 (Mod Detail Dialog) -->
+    <div
+      v-if="selectedModDetail"
+      class="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-200"
+      @click.self="closeModDetail"
+    >
+      <div
+        class="bg-m3-surface-container border border-m3-outline rounded-3xl max-w-2xl w-full shadow-m3-3 max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200"
+      >
+        <!-- 头部 Banner 区域：封面背景图 + 标题与关闭按钮 -->
+        <div class="relative shrink-0 overflow-hidden bg-m3-surface-dim border-b border-m3-outline-variant">
+          <!-- 封面图 (高斯模糊背景层 + 清晰居中大图) -->
+          <div class="relative h-48 sm:h-56 w-full overflow-hidden bg-gradient-to-b from-black/20 to-black/80 flex items-center justify-center">
+            <img
+              v-if="selectedModDetail.thumbnail"
+              :src="selectedModDetail.thumbnail"
+              class="absolute inset-0 w-full h-full object-cover blur-md scale-110 opacity-30 select-none pointer-events-none"
+              alt=""
+            />
+            <img
+              v-if="selectedModDetail.thumbnail"
+              :src="selectedModDetail.thumbnail"
+              @click="openModImageLightbox(selectedModDetail)"
+              class="relative max-h-full max-w-full object-contain rounded-lg shadow-lg z-10 cursor-pointer hover:scale-105 transition-transform duration-200"
+              alt=""
+              title="点击查看高清大图 (支持鼠标拖拽与滚轮缩放)"
+              @error="selectedModDetail.thumbnail = ''"
+            />
+            <div v-else class="flex flex-col items-center justify-center text-m3-on-surface-dim gap-2 z-10">
+              <Package class="w-14 h-14 stroke-[1.2] opacity-60" />
+              <span class="text-xs font-mono font-semibold tracking-wider">NO THUMBNAIL</span>
+            </div>
+
+            <!-- 右上角关闭按钮 -->
+            <button
+              @click="closeModDetail"
+              class="absolute top-4 right-4 z-20 p-2 rounded-full bg-black/50 hover:bg-black/75 text-white/80 hover:text-white backdrop-blur-md transition shadow-sm"
+              title="关闭详情 (Esc)"
+            >
+              <X class="w-5 h-5" />
+            </button>
+
+            <!-- 状态标签组 (左上方浮动) -->
+            <div class="absolute top-4 left-4 z-20 flex flex-wrap items-center gap-2">
+              <span
+                class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium backdrop-blur-md shadow-sm"
+                :class="selectedModDetail.enabled ? 'bg-m3-success-container/95 text-m3-on-success-container border border-m3-success/30' : 'bg-black/60 text-white/80 border border-white/20'"
+              >
+                <span class="w-2 h-2 rounded-full" :class="selectedModDetail.enabled ? 'bg-m3-success animate-pulse' : 'bg-white/50'" />
+                {{ selectedModDetail.enabled ? '已启用 (生效中)' : '已禁用' }}
+              </span>
+              <span
+                v-if="selectedModDetail.minVersion"
+                class="px-2.5 py-1 rounded-full text-xs font-mono font-medium bg-black/60 backdrop-blur-md text-m3-primary border border-m3-primary/30"
+              >
+                {{ selectedModDetail.minVersion }}
+              </span>
+              <span class="px-2.5 py-1 rounded-full text-xs font-mono bg-black/60 backdrop-blur-md text-white/80 border border-white/20">
+                {{ selectedModDetail.isDir ? '文件夹模组' : '.rwmod 压缩包' }}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 内容滚动区域 -->
+        <div class="flex-1 overflow-y-auto p-6 space-y-5 select-text">
+          <!-- 标题与文件名 -->
+          <div>
+            <h2 class="text-xl sm:text-2xl font-bold text-m3-on-surface leading-tight">
+              {{ selectedModDetail.titleZh || selectedModDetail.title }}
+            </h2>
+            <div v-if="selectedModDetail.titleZh && selectedModDetail.title && selectedModDetail.titleZh !== selectedModDetail.title" class="text-xs text-m3-on-surface-variant font-medium mt-0.5">
+              原标题: {{ selectedModDetail.title }}
+            </div>
+            <p class="text-xs text-m3-on-surface-dim font-mono mt-1 break-all flex items-center gap-1.5">
+              <FileText class="w-3.5 h-3.5 shrink-0" />
+              <span>{{ selectedModDetail.fileName }}</span>
+            </p>
+          </div>
+
+          <!-- 分类标签 (Tags) -->
+          <div v-if="selectedModDetail.tags && selectedModDetail.tags.length" class="flex flex-wrap gap-1.5">
+            <span
+              v-for="t in selectedModDetail.tags"
+              :key="t"
+              class="px-2.5 py-0.5 rounded-lg text-xs font-medium bg-m3-surface-highest text-m3-secondary border border-m3-outline-variant"
+            >
+              # {{ t }}
+            </span>
+          </div>
+
+          <!-- 4列核心统计指标卡片 -->
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div class="p-3 rounded-2xl bg-m3-surface-highest/50 border border-m3-outline-variant flex flex-col justify-between">
+              <div class="flex items-center gap-1.5 text-xs text-m3-on-surface-variant">
+                <Cpu class="w-4 h-4 text-m3-primary" />
+                <span>单位配置</span>
+              </div>
+              <div class="mt-2 text-lg font-bold font-mono text-m3-on-surface">
+                {{ selectedModDetail.unitCount }} <span class="text-xs font-normal text-m3-on-surface-dim">个 .ini</span>
+              </div>
+            </div>
+
+            <div class="p-3 rounded-2xl bg-m3-surface-highest/50 border border-m3-outline-variant flex flex-col justify-between">
+              <div class="flex items-center gap-1.5 text-xs text-m3-on-surface-variant">
+                <MapIcon class="w-4 h-4 text-m3-success" />
+                <span>内嵌地图</span>
+              </div>
+              <div class="mt-2 text-lg font-bold font-mono text-m3-on-surface">
+                {{ selectedModDetail.mapCount }} <span class="text-xs font-normal text-m3-on-surface-dim">张 .tmx</span>
+              </div>
+            </div>
+
+            <div class="p-3 rounded-2xl bg-m3-surface-highest/50 border border-m3-outline-variant flex flex-col justify-between">
+              <div class="flex items-center gap-1.5 text-xs text-m3-on-surface-variant">
+                <HardDrive class="w-4 h-4 text-m3-tertiary" />
+                <span>占用体积</span>
+              </div>
+              <div class="mt-2 text-lg font-bold font-mono text-m3-on-surface">
+                {{ formatBytes(selectedModDetail.fileSize) }}
+              </div>
+            </div>
+
+            <div class="p-3 rounded-2xl bg-m3-surface-highest/50 border border-m3-outline-variant flex flex-col justify-between">
+              <div class="flex items-center gap-1.5 text-xs text-m3-on-surface-variant">
+                <Calendar class="w-4 h-4 text-m3-secondary" />
+                <span>修改时间</span>
+              </div>
+              <div class="mt-2 text-xs font-mono text-m3-on-surface truncate" :title="formatDate(selectedModDetail.modTime)">
+                {{ formatDate(selectedModDetail.modTime) }}
+              </div>
+            </div>
+          </div>
+
+          <!-- 模组详细说明 (Description) -->
+          <div class="space-y-2">
+            <div class="flex items-center gap-1.5 text-xs font-semibold text-m3-on-surface uppercase tracking-wider">
+              <FileText class="w-4 h-4 text-m3-primary" />
+              <span>模组介绍说明 (mod-info.txt / ini)</span>
+            </div>
+            <div
+              class="p-4 rounded-2xl bg-m3-surface-highest/40 border border-m3-outline-variant text-xs sm:text-sm text-m3-on-surface-variant leading-relaxed whitespace-pre-wrap select-text max-h-60 overflow-y-auto font-sans"
+            >
+              {{ selectedModDetail.description || '该模组未提供文本描述信息。' }}
+            </div>
+          </div>
+
+          <!-- 本地物理路径与哈希值 -->
+          <div class="p-3.5 rounded-2xl bg-m3-surface-highest/30 border border-m3-outline-variant/80 space-y-2 text-xs font-mono">
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-1.5 text-m3-on-surface-variant truncate">
+                <Folder class="w-3.5 h-3.5 text-m3-secondary shrink-0" />
+                <span class="truncate" :title="selectedModDetail.filePath">{{ selectedModDetail.filePath }}</span>
+              </div>
+              <button
+                @click="handleCopyPath(selectedModDetail.filePath)"
+                class="px-2 py-1 rounded bg-m3-surface-highest hover:bg-m3-surface-high border border-m3-outline text-m3-on-surface-variant hover:text-m3-on-surface text-[11px] shrink-0 transition flex items-center gap-1"
+                title="复制完整路径"
+              >
+                <Copy class="w-3 h-3" />
+                <span>复制路径</span>
+              </button>
+            </div>
+
+            <div v-if="selectedModDetail.id" class="flex items-center justify-between gap-2 pt-1.5 border-t border-m3-outline-variant/60">
+              <div class="flex items-center gap-1.5 text-m3-on-surface-dim truncate">
+                <Hash class="w-3.5 h-3.5 shrink-0" />
+                <span class="truncate" :title="selectedModDetail.id">SHA: {{ selectedModDetail.id }}</span>
+              </div>
+              <button
+                @click="handleCopyPath(selectedModDetail.id)"
+                class="px-2 py-1 rounded bg-m3-surface-highest hover:bg-m3-surface-high border border-m3-outline text-m3-on-surface-variant hover:text-m3-on-surface text-[11px] shrink-0 transition flex items-center gap-1"
+                title="复制 SHA256 哈希"
+              >
+                <Copy class="w-3 h-3" />
+                <span>复制哈希</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 底部操作栏 (Action Footer) -->
+        <div class="p-4 sm:px-6 bg-m3-surface-container border-t border-m3-outline-variant flex flex-wrap items-center justify-between gap-3 shrink-0">
+          <div class="flex items-center gap-2">
+            <!-- 在资源管理器中定位 -->
+            <button
+              @click="handleOpenPathInExplorer(selectedModDetail.filePath)"
+              class="px-3.5 py-2 rounded-xl text-xs font-medium border border-m3-outline bg-m3-surface-highest hover:bg-m3-surface-high text-m3-on-surface transition flex items-center gap-1.5"
+              title="在系统资源管理器中打开此模组所在位置"
+            >
+              <Folder class="w-3.5 h-3.5 text-m3-secondary" />
+              <span>打开位置</span>
+            </button>
+
+            <!-- 创意工坊直达 -->
+            <button
+              v-if="selectedModDetail.steamId"
+              @click="openWorkshopLink(selectedModDetail.steamId)"
+              class="px-3.5 py-2 rounded-xl text-xs font-medium border border-m3-outline bg-m3-surface-highest hover:bg-m3-surface-high text-m3-primary transition flex items-center gap-1.5"
+              title="在 Steam 创意工坊网页中查看"
+            >
+              <ExternalLink class="w-3.5 h-3.5" />
+              <span>创意工坊</span>
+            </button>
+
+            <!-- 局域网推送给房主 -->
+            <button
+              v-if="lanStatus.role === 'client'"
+              @click="openPushModal('mod', selectedModDetail.fileName, selectedModDetail.fileSize)"
+              class="px-3.5 py-2 rounded-xl text-xs font-medium border border-m3-outline bg-m3-surface-highest hover:bg-m3-surface-high text-m3-on-surface transition flex items-center gap-1.5"
+              :title="lanStatus.activeServer ? '将此模组推送给房主服务端' : '向房主推送此模组 (待房主上线)'"
+            >
+              <UploadCloud class="w-3.5 h-3.5" />
+              <span>推送给房主</span>
+            </button>
+
+            <!-- 归档/删除模组 -->
+            <button
+              @click="openArchiveModal('mod', selectedModDetail.fileName, selectedModDetail.titleZh || selectedModDetail.title, selectedModDetail.fileSize)"
+              class="px-3.5 py-2 rounded-xl text-xs font-medium border border-m3-error/40 bg-m3-error-container/20 hover:bg-m3-error-container/40 text-m3-error transition flex items-center gap-1.5"
+              title="归档或删除此模组"
+            >
+              <Archive class="w-3.5 h-3.5" />
+              <span>归档模组</span>
+            </button>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <!-- 模组启用/禁用切换 -->
+            <button
+              @click="handleToggleMod(selectedModDetail)"
+              class="px-4 py-2 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 shadow-sm"
+              :class="selectedModDetail.enabled ? 'bg-m3-surface-highest hover:bg-m3-surface-high text-m3-on-surface border border-m3-outline' : 'bg-m3-primary hover:bg-m3-primary-hover text-white'"
+            >
+              <span class="w-2 h-2 rounded-full" :class="selectedModDetail.enabled ? 'bg-m3-success' : 'bg-white/60'" />
+              <span>{{ selectedModDetail.enabled ? '禁用此模组' : '启用此模组' }}</span>
+            </button>
+
+            <!-- 关闭窗口 -->
+            <button
+              @click="closeModDetail"
+              class="px-4 py-2 rounded-xl text-xs font-medium bg-m3-surface-high hover:bg-m3-surface-highest text-m3-on-surface border border-m3-outline transition"
+            >
+              关闭
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 7. 游戏路径自动探测与选择切换模态框 (类似 L4D2 VPK Manager) -->
     <div
       v-if="showPathModal"
       class="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 sm:p-6"
@@ -4471,6 +4858,35 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
+
+    <!-- 模组封面大图高级交互查看器 (ImageViewerModal) -->
+    <ImageViewerModal
+      :show="!!activeModImageModal"
+      :src="activeModImageModal?.src"
+      :has-image="!!activeModImageModal?.src"
+      :title="activeModImageModal?.title"
+      :subtitle="activeModImageModal?.subtitle"
+      :badge="activeModImageModal?.badge"
+      @close="closeModImageLightbox"
+    >
+      <template #header-icon>
+        <div class="w-8 h-8 rounded-xl bg-m3-primary-container text-m3-primary flex items-center justify-center shrink-0">
+          <Package class="w-4 h-4 text-m3-on-primary-container" />
+        </div>
+      </template>
+    </ImageViewerModal>
+
+    <!-- 8. 模组与地图归档/删除确认弹窗 -->
+    <ArchiveConfirmModal
+      :show="!!archiveTarget"
+      :target-type="archiveTarget?.type || 'mod'"
+      :title="archiveTarget?.title || ''"
+      :file-name="archiveTarget?.name || ''"
+      :file-size="archiveTarget?.fileSize || 0"
+      :loading="archiving"
+      @confirm="handleConfirmArchive"
+      @close="closeArchiveModal"
+    />
 
     <!-- 5. 全局通知 Toast 浮层 (M3 Snackbar) -->
     <div

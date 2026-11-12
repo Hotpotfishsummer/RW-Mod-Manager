@@ -12,6 +12,7 @@ import {
   LaunchPreset,
   SyncDiff,
   PushRequest,
+  PushResult,
   UpdateInfo,
   UpdateProgress
 } from '../types/api'
@@ -35,10 +36,12 @@ declare global {
           ScanMods(): Promise<ModItem[]>
           ToggleMod(fileName: string, enabled: boolean): Promise<void>
           BatchToggleMods(enableAll: boolean): Promise<void>
+          ArchiveMod(fileName: string, permanently: boolean): Promise<void>
           ScanMaps(): Promise<MapItem[]>
           ActivateMapParentMod(parentModFile: string): Promise<void>
           GenerateMapThumbnail(tmxPath: string): Promise<string>
           BatchGenerateThumbnails(force: boolean): Promise<number>
+          ArchiveMap(mapTarget: string, permanently: boolean): Promise<void>
           GetGamePreferences(): Promise<GamePreferences>
           SaveGamePreferences(prefs: GamePreferences): Promise<void>
           LaunchGame(): Promise<void>
@@ -55,7 +58,7 @@ declare global {
           RefreshDynamicPreset(): Promise<LaunchPreset>
           ComparePresetWithServer(serverIP: string, serverPort: number): Promise<SyncDiff>
           SyncFromHost(serverIP: string, serverPort: number): Promise<void>
-          RequestPushToHost(serverIP: string, serverPort: number, itemType: string, fileName: string): Promise<void>
+          RequestPushToHost(serverIP: string, serverPort: number, itemType: string, fileName: string): Promise<PushResult>
           HandlePushDecision(requestID: string, accept: boolean): Promise<void>
           GetPendingPushRequests(): Promise<PushRequest[]>
           CheckForUpdates(): Promise<UpdateInfo>
@@ -234,6 +237,11 @@ export function useApi() {
     console.log(`Mock batchToggleMods: ${enableAll}`)
   }
 
+  const archiveMod = async (fileName: string, permanently: boolean = false): Promise<void> => {
+    if (isWails()) return window.go!.main.App.ArchiveMod(fileName, permanently)
+    console.log(`Mock archiveMod: ${fileName}, permanently: ${permanently}`)
+  }
+
   const scanMaps = async (): Promise<MapItem[]> => {
     if (isWails()) return window.go!.main.App.ScanMaps()
     return []
@@ -252,6 +260,11 @@ export function useApi() {
   const batchGenerateThumbnails = async (force: boolean = false): Promise<number> => {
     if (isWails()) return window.go!.main.App.BatchGenerateThumbnails(force)
     return 0
+  }
+
+  const archiveMap = async (mapTarget: string, permanently: boolean = false): Promise<void> => {
+    if (isWails()) return window.go!.main.App.ArchiveMap(mapTarget, permanently)
+    console.log(`Mock archiveMap: ${mapTarget}, permanently: ${permanently}`)
   }
 
   const getGamePreferences = async (): Promise<GamePreferences> => {
@@ -477,9 +490,25 @@ export function useApi() {
     serverPort: number,
     itemType: string,
     fileName: string
-  ): Promise<void> => {
+  ): Promise<PushResult> => {
     if (isWails()) return window.go!.main.App.RequestPushToHost(serverIP, serverPort, itemType, fileName)
     console.log(`Mock requestPushToHost: ${itemType} ${fileName} to ${serverIP}:${serverPort}`)
+    return {
+      success: true,
+      status: 'completed',
+      requestId: 'mock-push-id',
+      itemType: itemType as 'mod' | 'map',
+      fileName,
+      fileSize: 1024 * 512,
+      contentHash: 'd41d8cd98f00b204e9800998ecf8427e',
+      serverName: 'Host-Server-PC',
+      serverIp: serverIP,
+      overwritten: false,
+      backupCreated: false,
+      skippedUpload: false,
+      message: `推送成功！${fileName} 已送达房主资源库`,
+      completedAt: Math.floor(Date.now() / 1000)
+    }
   }
 
   const handlePushDecision = async (requestID: string, accept: boolean): Promise<void> => {
@@ -521,7 +550,7 @@ export function useApi() {
 
   const getCurrentVersion = async (): Promise<string> => {
     if (isWails()) return window.go!.main.App.GetCurrentVersion()
-    return '1.2.3'
+    return '1.2.6'
   }
 
   const freeMemory = async (): Promise<void> => {
@@ -543,10 +572,12 @@ export function useApi() {
     scanMods,
     toggleMod,
     batchToggleMods,
+    archiveMod,
     scanMaps,
     activateMapParentMod,
     generateMapThumbnail,
     batchGenerateThumbnails,
+    archiveMap,
     getGamePreferences,
     saveGamePreferences,
     launchGame,

@@ -538,3 +538,131 @@ func (s *ModService) ServeModThumbnail(w http.ResponseWriter, r *http.Request, g
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(imgBytes)
 }
+
+// ArchiveMod 归档或彻底删除指定的单位模组
+// fileName: 模组文件名或目录名 (如 "od_origin.rwmod")
+// permanently: true 为永久彻底删除；false 为移入 mods/_archived/units 目录安全归档
+func (s *ModService) ArchiveMod(gameDir string, fileName string, permanently bool) error {
+	if fileName == "" {
+		return fmt.Errorf("模组名称不能为空")
+	}
+	cleanName := filepath.Base(fileName)
+	if cleanName == "." || cleanName == "/" || cleanName == "\\" || strings.HasPrefix(cleanName, "..") {
+		return fmt.Errorf("非法的文件名路径: %s", fileName)
+	}
+	if strings.EqualFold(cleanName, "custom_units_here.txt") {
+		return fmt.Errorf("无法归档系统说明文件")
+	}
+
+	unitsDir := filepath.Join(gameDir, "mods", "units")
+	targetPath := filepath.Join(unitsDir, cleanName)
+
+	info, err := os.Stat(targetPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("模组文件不存在: %s", cleanName)
+		}
+		return fmt.Errorf("读取模组文件失败: %w", err)
+	}
+
+	if permanently {
+		if err := os.RemoveAll(targetPath); err != nil {
+			return fmt.Errorf("删除模组文件失败: %w", err)
+		}
+	} else {
+		archiveDir := filepath.Join(gameDir, "mods", "_archived", "units")
+		if err := os.MkdirAll(archiveDir, 0755); err != nil {
+			return fmt.Errorf("创建归档目录失败: %w", err)
+		}
+
+		destPath := filepath.Join(archiveDir, cleanName)
+		if _, err := os.Stat(destPath); err == nil {
+			_ = os.RemoveAll(destPath)
+		}
+
+		if err := moveFileOrDir(targetPath, destPath, info.IsDir()); err != nil {
+			return fmt.Errorf("移入归档目录失败: %w", err)
+		}
+	}
+
+	// 从 preferences.ini 中清理模组记录
+	modHash := s.prefService.CalculateModHash(cleanName)
+	_ = s.prefService.RemoveModSetting(gameDir, modHash)
+
+	// 清理缓存
+	cm := GetCacheManager()
+	cm.InvalidateMod(cleanName)
+	cm.SaveModCache()
+
+	return nil
+}
+
+// moveFileOrDir 优先采用原子重命名，若遇到跨卷限制则采用复制后删除
+func moveFileOrDir(src, dst string, isDir bool) error {
+	err := os.Rename(src, dst)
+	if err == nil {
+		return nil
+	}
+
+	if !isDir {
+		in, err := os.Open(src)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+
+		out, err := os.Create(dst)
+		if err != nil {
+			return err
+		}
+		defer out.Close()
+
+		if _, err = io.Copy(out, in); err != nil {
+			return err
+		}
+		_ = in.Close()
+		_ = out.Close()
+		return os.Remove(src)
+	}
+
+	if err := copyDir(src, dst); err != nil {
+		return err
+	}
+	return os.RemoveAll(src)
+}
+
+func copyDir(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dst, 0755); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		s := filepath.Join(src, entry.Name())
+		d := filepath.Join(dst, entry.Name())
+		if entry.IsDir() {
+			if err := copyDir(s, d); err != nil {
+				return err
+			}
+		} else {
+			in, err := os.Open(s)
+			if err != nil {
+				return err
+			}
+			out, err := os.Create(d)
+			if err != nil {
+				in.Close()
+				return err
+			}
+			_, cpErr := io.Copy(out, in)
+			in.Close()
+			out.Close()
+			if cpErr != nil {
+				return cpErr
+			}
+		}
+	}
+	return nil
+}

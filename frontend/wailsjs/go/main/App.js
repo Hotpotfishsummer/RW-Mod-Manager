@@ -10,6 +10,14 @@ export function AddCustomGameDir(arg1) {
   return window['go']['main']['App']['AddCustomGameDir'](arg1);
 }
 
+export function ArchiveMap(arg1, arg2) {
+  return window['go']['main']['App']['ArchiveMap'](arg1, arg2);
+}
+
+export function ArchiveMod(arg1, arg2) {
+  return window['go']['main']['App']['ArchiveMod'](arg1, arg2);
+}
+
 export function AssetHandler() {
   return window['go']['main']['App']['AssetHandler']();
 }

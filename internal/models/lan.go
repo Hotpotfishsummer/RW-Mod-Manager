@@ -91,15 +91,37 @@ type SyncDiff struct {
 
 // PushRequest 客户端向服务端发起推送模组/地图的请求
 type PushRequest struct {
-	ID        string  `json:"id"`        // 请求唯一 ID
-	PeerID    string  `json:"peerId"`    // 发起端实例 ID
-	PeerName  string  `json:"peerName"`  // 发起端主机名
-	PeerIP    string  `json:"peerIp"`    // 发起端 IP
-	ItemType  string  `json:"itemType"`  // "mod" | "map"
-	FileName  string  `json:"fileName"`  // 文件名
-	FileSize  int64   `json:"fileSize"`  // 文件大小
-	Status    string  `json:"status"`    // "pending" | "accepted" | "rejected" | "completed"
-	CreatedAt int64   `json:"createdAt"` // 创建时间
+	ID           string `json:"id"`                     // 请求唯一 ID
+	PeerID       string `json:"peerId"`                 // 发起端实例 ID
+	PeerName     string `json:"peerName"`               // 发起端主机名
+	PeerIP       string `json:"peerIp"`                 // 发起端 IP
+	ItemType     string `json:"itemType"`               // "mod" | "map"
+	FileName     string `json:"fileName"`               // 文件名
+	FileSize     int64  `json:"fileSize"`               // 文件大小
+	ContentHash  string `json:"contentHash"`            // 推送文件的真实内容 MD5
+	ExistingHash string `json:"existingHash,omitempty"` // 服务端已有同名文件的 MD5 (若冲突)
+	ExistingSize int64  `json:"existingSize,omitempty"` // 服务端已有同名文件的大小 (若冲突)
+	HasConflict  bool   `json:"hasConflict"`            // 服务端是否已存在同名但 MD5 不同的文件
+	Status       string `json:"status"`                 // "pending" | "accepted" | "uploading" | "rejected" | "completed" | "superseded" | "expired"
+	CreatedAt    int64  `json:"createdAt"`              // 创建时间
+}
+
+// PushResult 客户端推送完成后的结构化反馈结果
+type PushResult struct {
+	Success       bool   `json:"success"`       // 是否成功
+	Status        string `json:"status"`        // "completed" | "already_exists"
+	RequestID     string `json:"requestId"`     // 推送请求 ID
+	ItemType      string `json:"itemType"`      // "mod" | "map"
+	FileName      string `json:"fileName"`      // 最终落地文件名
+	FileSize      int64  `json:"fileSize"`      // 传输文件大小
+	ContentHash   string `json:"contentHash"`   // 传输文件 MD5
+	ServerName    string `json:"serverName"`    // 房主设备名称
+	ServerIP      string `json:"serverIp"`      // 房主 IP 地址
+	Overwritten   bool   `json:"overwritten"`   // 是否覆盖了服务端同名不同 MD5 文件
+	BackupCreated bool   `json:"backupCreated"` // 服务端是否已自动备份原文件
+	SkippedUpload bool   `json:"skippedUpload"` // 服务端已存在完全一致的文件，跳过上传
+	Message       string `json:"message"`       // 友好结果说明
+	CompletedAt   int64  `json:"completedAt"`   // 完成时间戳 (Unix 秒)
 }
 
 // LanStatus 当前节点的局域网与同步状态总览

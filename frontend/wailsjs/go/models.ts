@@ -463,6 +463,10 @@ export namespace models {
 	    itemType: string;
 	    fileName: string;
 	    fileSize: number;
+	    contentHash: string;
+	    existingHash?: string;
+	    existingSize?: number;
+	    hasConflict: boolean;
 	    status: string;
 	    createdAt: number;
 	
@@ -479,8 +483,50 @@ export namespace models {
 	        this.itemType = source["itemType"];
 	        this.fileName = source["fileName"];
 	        this.fileSize = source["fileSize"];
+	        this.contentHash = source["contentHash"];
+	        this.existingHash = source["existingHash"];
+	        this.existingSize = source["existingSize"];
+	        this.hasConflict = source["hasConflict"];
 	        this.status = source["status"];
 	        this.createdAt = source["createdAt"];
+	    }
+	}
+	export class PushResult {
+	    success: boolean;
+	    status: string;
+	    requestId: string;
+	    itemType: string;
+	    fileName: string;
+	    fileSize: number;
+	    contentHash: string;
+	    serverName: string;
+	    serverIp: string;
+	    overwritten: boolean;
+	    backupCreated: boolean;
+	    skippedUpload: boolean;
+	    message: string;
+	    completedAt: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PushResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.status = source["status"];
+	        this.requestId = source["requestId"];
+	        this.itemType = source["itemType"];
+	        this.fileName = source["fileName"];
+	        this.fileSize = source["fileSize"];
+	        this.contentHash = source["contentHash"];
+	        this.serverName = source["serverName"];
+	        this.serverIp = source["serverIp"];
+	        this.overwritten = source["overwritten"];
+	        this.backupCreated = source["backupCreated"];
+	        this.skippedUpload = source["skippedUpload"];
+	        this.message = source["message"];
+	        this.completedAt = source["completedAt"];
 	    }
 	}
 	export class SyncDiff {

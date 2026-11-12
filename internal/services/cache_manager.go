@@ -162,6 +162,18 @@ func (cm *CacheManager) SetHash(path string, modTime, fileSize int64, hash strin
 	cm.hashDirty = true
 }
 
+// InvalidateHash 使指定路径的内容哈希缓存失效
+func (cm *CacheManager) InvalidateHash(path string) {
+	cm.hashMu.Lock()
+	defer cm.hashMu.Unlock()
+
+	clean := filepath.Clean(path)
+	if _, ok := cm.hashCache[clean]; ok {
+		delete(cm.hashCache, clean)
+		cm.hashDirty = true
+	}
+}
+
 // SaveHashCache 保存哈希缓存至磁盘
 func (cm *CacheManager) SaveHashCache() {
 	cm.hashMu.Lock()
@@ -228,6 +240,15 @@ func (cm *CacheManager) PruneMods(existingFileNames map[string]bool) {
 			cm.modDirty = true
 		}
 	}
+}
+
+// InvalidateMod 使指定模组元数据缓存失效
+func (cm *CacheManager) InvalidateMod(fileName string) {
+	cm.modMu.Lock()
+	defer cm.modMu.Unlock()
+
+	delete(cm.modCache, fileName)
+	cm.modDirty = true
 }
 
 // SaveModCache 保存模组缓存至磁盘

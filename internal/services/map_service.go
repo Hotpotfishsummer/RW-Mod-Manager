@@ -466,3 +466,115 @@ func (s *MapService) ServeMapThumbnail(w http.ResponseWriter, r *http.Request, g
 
 	http.NotFound(w, r)
 }
+
+// ArchiveMap 归档或彻底删除指定的独立地图或地图包
+// mapTarget: 可以是独立地图文件名 (如 "1917-流血的城市.tmx")、地图包文件名 (如 "ww1_maps.rwmod") 或地图 ID
+// permanently: true 为永久彻底删除；false 为移入 mods/_archived/maps 目录安全归档
+func (s *MapService) ArchiveMap(gameDir string, mapTarget string, permanently bool) error {
+	if mapTarget == "" {
+		return fmt.Errorf("地图目标名称不能为空")
+	}
+
+	cleanTarget := filepath.Clean(mapTarget)
+	if strings.Contains(cleanTarget, "/") || strings.Contains(cleanTarget, "\\") {
+		parts := strings.FieldsFunc(cleanTarget, func(r rune) bool {
+			return r == '/' || r == '\\'
+		})
+		if len(parts) > 0 && strings.HasSuffix(strings.ToLower(parts[0]), ".rwmod") {
+			cleanTarget = parts[0]
+		} else {
+			cleanTarget = filepath.Base(cleanTarget)
+		}
+	} else {
+		cleanTarget = filepath.Base(cleanTarget)
+	}
+
+	if cleanTarget == "." || cleanTarget == "/" || cleanTarget == "\\" || strings.HasPrefix(cleanTarget, "..") {
+		return fmt.Errorf("非法的文件名路径: %s", mapTarget)
+	}
+
+	mapsDir := filepath.Join(gameDir, "mods", "maps")
+	filePath := filepath.Join(mapsDir, cleanTarget)
+
+	info, err := os.Stat(filePath)
+	if err != nil {
+		unitsDir := filepath.Join(gameDir, "mods", "units")
+		if _, uErr := os.Stat(filepath.Join(unitsDir, cleanTarget)); uErr == nil {
+			return fmt.Errorf("该地图/资源隶属于单位模组 [%s]，请前往模组管理页面归档宿主模组", cleanTarget)
+		}
+		if os.IsNotExist(err) {
+			return fmt.Errorf("地图文件不存在: %s", cleanTarget)
+		}
+		return fmt.Errorf("读取地图文件失败: %w", err)
+	}
+
+	targetLower := strings.ToLower(cleanTarget)
+	cm := GetCacheManager()
+
+	// 1. 如果是独立 TMX 地图
+	if strings.HasSuffix(targetLower, ".tmx") {
+		baseName := strings.TrimSuffix(cleanTarget, filepath.Ext(cleanTarget))
+		previewPath := filepath.Join(mapsDir, baseName+"_map.png")
+
+		if permanently {
+			if err := os.Remove(filePath); err != nil {
+				return fmt.Errorf("删除地图文件失败: %w", err)
+			}
+			if _, pErr := os.Stat(previewPath); pErr == nil {
+				_ = os.Remove(previewPath)
+			}
+		} else {
+			archiveDir := filepath.Join(gameDir, "mods", "_archived", "maps")
+			if err := os.MkdirAll(archiveDir, 0755); err != nil {
+				return fmt.Errorf("创建地图归档目录失败: %w", err)
+			}
+
+			destPath := filepath.Join(archiveDir, cleanTarget)
+			if _, err := os.Stat(destPath); err == nil {
+				_ = os.Remove(destPath)
+			}
+			if err := moveFileOrDir(filePath, destPath, false); err != nil {
+				return fmt.Errorf("移入地图归档目录失败: %w", err)
+			}
+
+			// 同步归档已渲染的高清出生点预览图 (若存在)
+			if _, pErr := os.Stat(previewPath); pErr == nil {
+				destPreview := filepath.Join(archiveDir, baseName+"_map.png")
+				_ = os.Remove(destPreview)
+				_ = moveFileOrDir(previewPath, destPreview, false)
+			}
+		}
+
+		cm.InvalidateMapCache(filePath)
+		cm.SaveMapCache()
+		return nil
+	}
+
+	// 2. 如果是地图包 .rwmod
+	if strings.HasSuffix(targetLower, ".rwmod") {
+		if permanently {
+			if err := os.Remove(filePath); err != nil {
+				return fmt.Errorf("删除地图包失败: %w", err)
+			}
+		} else {
+			archiveDir := filepath.Join(gameDir, "mods", "_archived", "maps")
+			if err := os.MkdirAll(archiveDir, 0755); err != nil {
+				return fmt.Errorf("创建地图归档目录失败: %w", err)
+			}
+
+			destPath := filepath.Join(archiveDir, cleanTarget)
+			if _, err := os.Stat(destPath); err == nil {
+				_ = os.Remove(destPath)
+			}
+			if err := moveFileOrDir(filePath, destPath, info.IsDir()); err != nil {
+				return fmt.Errorf("移入地图包归档目录失败: %w", err)
+			}
+		}
+
+		cm.InvalidateMapCache(filePath)
+		cm.SaveMapCache()
+		return nil
+	}
+
+	return fmt.Errorf("不支持的地图文件格式: %s", cleanTarget)
+}
