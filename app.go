@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	stdRuntime "runtime"
@@ -12,6 +13,7 @@ import (
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"rw_mod_manager/internal/applog"
 	"rw_mod_manager/internal/models"
 	"rw_mod_manager/internal/services"
 )
@@ -51,9 +53,11 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	applog.SetWailsContext(ctx)
 	a.lanService.SetWailsContext(ctx)
 	a.updateService.SetWailsContext(ctx)
 	a.lanService.Start()
+	applog.Info("App", "Wails 运行时初始化完成，局域网与后台服务已启动")
 
 	// 启动后异步调度内存整理与操作系统内存返还，进一步压缩常驻工作集
 	go func() {
@@ -64,11 +68,13 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	applog.Info("App", "========== 应用正在关闭 ==========")
 	if a.lanService != nil {
 		a.lanService.Stop()
 	}
 	// 退出前刷盘持久化全部缓存
 	services.GetCacheManager().FlushAll()
+	applog.Close()
 }
 
 // AssetHandler 提供 Wails AssetServer 自定义 HTTP 资源流式传输 (用于模组与地图封面，避免高占用 Base64)
@@ -118,12 +124,78 @@ func (a *App) GetConfig() models.AppConfig {
 // SaveConfig 保存用户配置 (如启动参数等)
 func (a *App) SaveConfig(cfg models.AppConfig) error {
 	if a.gameService.ValidateGameDir(cfg.GameDir) {
-		_ = a.prefService.SaveGamePreferences(cfg.GameDir, cfg.GamePreferences)
+		if err := a.prefService.SaveGamePreferences(cfg.GameDir, cfg.GamePreferences); err != nil {
+			applog.Warn("PrefService", "保存游戏偏好设置失败: %v", err)
+		}
 	}
 	// 避免前端传递的旧 LanConfig 冲掉已切换的服务端/客户端角色
 	currentLan := a.lanService.GetLanConfig()
 	cfg.LanConfig = currentLan
+	if cfg.LogLevel == "" {
+		cfg.LogLevel = a.gameService.Config.LogLevel
+	}
 	return a.gameService.SaveConfig(cfg)
+}
+
+// GetLogInfo 获取当前日志等级、文件路径与占用大小
+func (a *App) GetLogInfo() models.LogInfo {
+	return models.LogInfo{
+		LogLevel:    applog.GetLevel(),
+		LogFilePath: applog.GetLogFilePath(),
+		LogDir:      applog.GetLogDir(),
+		FileSize:    applog.GetLogFileSize(),
+	}
+}
+
+// SetLogLevel 动态调整日志等级并持久化至配置文件
+func (a *App) SetLogLevel(level string) (models.LogInfo, error) {
+	norm := applog.NormalizeLevel(level)
+	cfg := a.gameService.Config
+	cfg.LogLevel = norm
+	if err := a.gameService.SaveConfig(cfg); err != nil {
+		applog.Error("App", "保存日志等级配置失败: %v", err)
+		return a.GetLogInfo(), err
+	}
+	return a.GetLogInfo(), nil
+}
+
+// OpenLogFolder 在系统文件管理器中打开日志所在目录并高亮日志文件
+func (a *App) OpenLogFolder() error {
+	logPath := applog.GetLogFilePath()
+	logDir := applog.GetLogDir()
+	if stdRuntime.GOOS == "windows" {
+		if _, err := os.Stat(logPath); err == nil {
+			return exec.Command("explorer", "/select,"+logPath).Start()
+		}
+		return exec.Command("explorer", logDir).Start()
+	}
+	return a.OpenPath(logDir)
+}
+
+// OpenLogFile 使用系统默认文本程序打开当前日志文件
+func (a *App) OpenLogFile() error {
+	logPath := applog.GetLogFilePath()
+	if _, err := os.Stat(logPath); err != nil {
+		return fmt.Errorf("日志文件暂不存在: %w", err)
+	}
+	if stdRuntime.GOOS == "windows" {
+		return exec.Command("cmd", "/c", "start", "", logPath).Start()
+	}
+	return a.OpenPath(logPath)
+}
+
+// ClearLogs 清空日志文件与历史备份
+func (a *App) ClearLogs() (models.LogInfo, error) {
+	if err := applog.Clear(); err != nil {
+		applog.Error("App", "清空日志文件失败: %v", err)
+		return a.GetLogInfo(), err
+	}
+	return a.GetLogInfo(), nil
+}
+
+// WriteClientLog 接收前端上报的运行时错误与关键调试日志并写入日志文件
+func (a *App) WriteClientLog(level string, source string, message string) {
+	applog.WriteClientLog(level, source, message)
 }
 
 // SelectGameDir 打开系统原生目录选择对话框
@@ -139,12 +211,20 @@ func (a *App) SelectGameDir() string {
 
 // DetectGameDirs 自动探测系统中全部可用的铁锈战争安装路径 (注册表/Steam库/进程/磁盘扫描)
 func (a *App) DetectGameDirs() []models.GamePathItem {
-	return a.gameService.DetectAllGameDirs()
+	dirs := a.gameService.DetectAllGameDirs()
+	if dirs == nil {
+		return []models.GamePathItem{}
+	}
+	return dirs
 }
 
 // GetKnownGameDirs 获取当前已记录的游戏路径列表
 func (a *App) GetKnownGameDirs() []models.GamePathItem {
-	return a.gameService.GetKnownGameDirs()
+	dirs := a.gameService.GetKnownGameDirs()
+	if dirs == nil {
+		return []models.GamePathItem{}
+	}
+	return dirs
 }
 
 // SwitchGameDir 切换当前游戏根路径并刷新健康状态
@@ -164,9 +244,13 @@ func (a *App) AddCustomGameDir(dir string) (models.GamePathItem, error) {
 // RemoveKnownGameDir 从记录中移除某个游戏路径
 func (a *App) RemoveKnownGameDir(dir string) ([]models.GamePathItem, error) {
 	if err := a.gameService.RemoveKnownGameDir(dir); err != nil {
-		return nil, err
+		return []models.GamePathItem{}, err
 	}
-	return a.gameService.GetKnownGameDirs(), nil
+	dirs := a.gameService.GetKnownGameDirs()
+	if dirs == nil {
+		return []models.GamePathItem{}, nil
+	}
+	return dirs, nil
 }
 
 // SetGameDir 设置并验证新的游戏目录 (兼容既有前端调用)
@@ -214,9 +298,16 @@ func (a *App) GetGameStatus() models.GameStatus {
 func (a *App) ScanMods() ([]models.ModItem, error) {
 	dir := a.gameService.Config.GameDir
 	if !a.gameService.ValidateGameDir(dir) {
-		return nil, fmt.Errorf("游戏路径未配置或无效")
+		return []models.ModItem{}, fmt.Errorf("游戏路径未配置或无效")
 	}
-	return a.modService.ScanMods(dir)
+	mods, err := a.modService.ScanMods(dir)
+	if err != nil {
+		return []models.ModItem{}, err
+	}
+	if mods == nil {
+		mods = []models.ModItem{}
+	}
+	return mods, nil
 }
 
 // ToggleMod 切换单个模组的启用/禁用状态
@@ -276,9 +367,16 @@ func (a *App) ArchiveMod(fileName string, permanently bool) error {
 func (a *App) ScanMaps() ([]models.MapItem, error) {
 	dir := a.gameService.Config.GameDir
 	if !a.gameService.ValidateGameDir(dir) {
-		return nil, fmt.Errorf("游戏路径未配置或无效")
+		return []models.MapItem{}, fmt.Errorf("游戏路径未配置或无效")
 	}
-	return a.mapService.ScanMaps(dir)
+	maps, err := a.mapService.ScanMaps(dir)
+	if err != nil {
+		return []models.MapItem{}, err
+	}
+	if maps == nil {
+		maps = []models.MapItem{}
+	}
+	return maps, nil
 }
 
 // ActivateMapParentMod 一键激活该地图所属的宿主模组
@@ -450,37 +548,53 @@ func (a *App) GetPendingPushRequests() []models.PushRequest {
 func (a *App) LaunchGameOnline() error {
 	dir := a.gameService.Config.GameDir
 	if !a.gameService.ValidateGameDir(dir) {
+		applog.Warn("Launch", "联机启动被拒绝：游戏路径未配置或无效 (%s)", dir)
 		return fmt.Errorf("游戏路径未配置或无效")
 	}
 
 	st := a.lanService.GetLanStatus()
 	if st.HasServerConflict {
+		applog.Warn("Launch", "联机启动被拦截：局域网存在多个服务端冲突")
 		return fmt.Errorf("局域网检测到多个服务端冲突，操作已被禁止！请先在局域网面板中切换解决冲突")
 	}
 
 	if st.Role == models.RoleClient {
 		if st.ActiveServer == nil {
+			applog.Warn("Launch", "联机启动失败：未找到有效的房主服务端")
 			return fmt.Errorf("当前网络中未找到有效的房主服务端，请确认房主已启动并处于同一网络")
 		}
+		applog.Info("Launch", "联机模式：正在从房主 %s (%s:%d) 同步预设", st.ActiveServer.DeviceName, st.ActiveServer.IP, st.ActiveServer.HttpPort)
 		// 自动执行从服务端到客户端的完整同步 (下载缺失文件 + 同步启用状态)
 		if err := a.lanService.SyncWithServer(st.ActiveServer.IP, st.ActiveServer.HttpPort); err != nil {
+			applog.Error("Launch", "联机前同步房主预设失败: %v", err)
 			return fmt.Errorf("联机前同步房主预设失败: %w", err)
 		}
 	} else if st.Role == models.RoleServer {
 		// 服务端即为房主：生成并更新本地动态预设，供所有连入的客户端同步
 		_, _ = a.lanService.RefreshDynamicPreset()
+		applog.Info("Launch", "联机模式：作为房主服务端刷新动态预设并准备启动")
 	}
 
-	return a.launchService.LaunchGame(dir, a.gameService.Config.LaunchConfig)
+	if err := a.launchService.LaunchGame(dir, a.gameService.Config.LaunchConfig); err != nil {
+		applog.Error("Launch", "联机拉起游戏进程失败: %v", err)
+		return err
+	}
+	return nil
 }
 
 // LaunchGameSingle 单机模式启动：以本机当前独立配置拉起游戏，不干涉联机预设
 func (a *App) LaunchGameSingle() error {
 	dir := a.gameService.Config.GameDir
 	if !a.gameService.ValidateGameDir(dir) {
+		applog.Warn("Launch", "单机启动被拒绝：游戏路径未配置或无效 (%s)", dir)
 		return fmt.Errorf("游戏路径未配置或无效")
 	}
-	return a.launchService.LaunchGame(dir, a.gameService.Config.LaunchConfig)
+	applog.Info("Launch", "单机模式拉起游戏: dir=%s", dir)
+	if err := a.launchService.LaunchGame(dir, a.gameService.Config.LaunchConfig); err != nil {
+		applog.Error("Launch", "单机拉起游戏进程失败: %v", err)
+		return err
+	}
+	return nil
 }
 
 // CheckForUpdates 统一检测更新 (同时检索局域网在线节点与 GitHub Releases)

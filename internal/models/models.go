@@ -91,10 +91,19 @@ type GamePathItem struct {
 	LastUsed   int64  `json:"lastUsed"`   // 最后使用时间戳 (Unix 秒)
 }
 
+// LogInfo 应用运行日志配置与文件状态
+type LogInfo struct {
+	LogLevel    string `json:"logLevel"`    // 当前日志等级: "debug" | "info" | "warn" | "error"
+	LogFilePath string `json:"logFilePath"` // 当前活跃日志文件绝对路径
+	LogDir      string `json:"logDir"`      // 日志目录绝对路径
+	FileSize    int64  `json:"fileSize"`    // 当前日志及备份总字节数
+}
+
 // AppConfig 管理器自身的全局配置
 type AppConfig struct {
 	GameDir         string          `json:"gameDir"`
 	KnownGameDirs   []string        `json:"knownGameDirs,omitempty"`
+	LogLevel        string          `json:"logLevel"`
 	LaunchConfig    LaunchConfig    `json:"launchConfig"`
 	GamePreferences GamePreferences `json:"gamePreferences"`
 	LanConfig       LanConfig       `json:"lanConfig"`

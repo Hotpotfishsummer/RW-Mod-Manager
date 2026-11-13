@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"rw_mod_manager/internal/applog"
 	"rw_mod_manager/internal/models"
 )
 
@@ -41,6 +42,7 @@ func NewGameService() *GameService {
 		configPath: cfgPath,
 		Config: models.AppConfig{
 			KnownGameDirs: []string{},
+			LogLevel:      "info",
 			LaunchConfig: models.LaunchConfig{
 				ExecutableType: "java", // 默认推荐使用内置 64位 JVM 模式，以支持自定义内存扩展与 G1GC 调优
 				MaxMemoryMB:    4096,
@@ -81,6 +83,10 @@ func NewGameService() *GameService {
 func (s *GameService) LoadConfig() {
 	data, err := os.ReadFile(s.configPath)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			applog.Warn("GameService", "读取配置文件 %s 失败: %v", s.configPath, err)
+		}
+		applog.SetLevel(s.Config.LogLevel)
 		return
 	}
 	var cfg models.AppConfig
@@ -90,6 +96,9 @@ func (s *GameService) LoadConfig() {
 		}
 		if len(cfg.KnownGameDirs) > 0 {
 			s.Config.KnownGameDirs = cfg.KnownGameDirs
+		}
+		if cfg.LogLevel != "" {
+			s.Config.LogLevel = applog.NormalizeLevel(cfg.LogLevel)
 		}
 		if cfg.LaunchConfig.MaxMemoryMB > 0 {
 			s.Config.LaunchConfig = cfg.LaunchConfig
@@ -117,17 +126,29 @@ func (s *GameService) LoadConfig() {
 		}
 		s.Config.LanConfig.SelectedSubnet = cfg.LanConfig.SelectedSubnet
 		s.Config.LanConfig.AutoAcceptClientPushes = cfg.LanConfig.AutoAcceptClientPushes
+	} else {
+		applog.Error("GameService", "解析配置文件 %s 失败: %v", s.configPath, err)
 	}
+	applog.SetLevel(s.Config.LogLevel)
+	applog.Debug("GameService", "已加载配置: path=%s, gameDir=%s, logLevel=%s", s.configPath, s.Config.GameDir, s.Config.LogLevel)
 }
 
 // SaveConfig 保存配置到磁盘
 func (s *GameService) SaveConfig(cfg models.AppConfig) error {
+	cfg.LogLevel = applog.NormalizeLevel(cfg.LogLevel)
 	s.Config = cfg
+	applog.SetLevel(s.Config.LogLevel)
 	data, err := json.MarshalIndent(s.Config, "", "  ")
 	if err != nil {
+		applog.Error("GameService", "序列化配置失败: %v", err)
 		return err
 	}
-	return os.WriteFile(s.configPath, data, 0644)
+	if err := os.WriteFile(s.configPath, data, 0644); err != nil {
+		applog.Error("GameService", "写入配置文件 %s 失败: %v", s.configPath, err)
+		return err
+	}
+	applog.Debug("GameService", "配置已保存: path=%s, logLevel=%s", s.configPath, s.Config.LogLevel)
+	return nil
 }
 
 // ValidateGameDir 验证指定目录是否为有效的《铁锈战争》根目录
@@ -232,7 +253,7 @@ func (s *GameService) InspectGameDir(dir string, source, sourceName string, isAc
 
 // DetectAllGameDirs 全量执行系统探测，结合注册表、Steam库、运行进程与磁盘检索，并聚合历史路径
 func (s *GameService) DetectAllGameDirs() []models.GamePathItem {
-	var results []models.GamePathItem
+	results := make([]models.GamePathItem, 0)
 	seen := make(map[string]int) // normalized path -> index in results
 
 	addOrUpdate := func(item models.GamePathItem) {
@@ -324,7 +345,7 @@ func (s *GameService) DetectAllGameDirs() []models.GamePathItem {
 
 // GetKnownGameDirs 获取当前已记录的游戏路径列表（包含当前激活路径与有效性状态）
 func (s *GameService) GetKnownGameDirs() []models.GamePathItem {
-	var list []models.GamePathItem
+	list := make([]models.GamePathItem, 0)
 	seen := make(map[string]bool)
 
 	currentActive := filepath.Clean(s.Config.GameDir)
@@ -353,11 +374,13 @@ func (s *GameService) GetKnownGameDirs() []models.GamePathItem {
 func (s *GameService) SwitchGameDir(dir string) error {
 	cleanDir := filepath.Clean(dir)
 	if !s.ValidateGameDir(cleanDir) {
+		applog.Warn("GameService", "切换游戏目录校验失败: %s", cleanDir)
 		return fmt.Errorf("所选目录不是有效的铁锈战争根目录（需包含 game-lib.jar 和 mods/ 文件夹）")
 	}
 
 	s.Config.GameDir = cleanDir
 	s.ensureKnownGameDir(cleanDir)
+	applog.Info("GameService", "切换游戏根目录至: %s", cleanDir)
 	return s.SaveConfig(s.Config)
 }
 
@@ -365,12 +388,14 @@ func (s *GameService) SwitchGameDir(dir string) error {
 func (s *GameService) AddCustomGameDir(dir string) (models.GamePathItem, error) {
 	cleanDir := filepath.Clean(dir)
 	if !s.ValidateGameDir(cleanDir) {
+		applog.Warn("GameService", "添加自定义游戏目录校验失败: %s", cleanDir)
 		return models.GamePathItem{}, fmt.Errorf("所选目录不是有效的铁锈战争根目录（需包含 game-lib.jar 和 mods/ 文件夹）")
 	}
 
 	s.Config.GameDir = cleanDir
 	s.ensureKnownGameDir(cleanDir)
 	_ = s.SaveConfig(s.Config)
+	applog.Info("GameService", "已添加并激活自定义游戏目录: %s", cleanDir)
 
 	return s.InspectGameDir(cleanDir, "manual", "自定义添加", true), nil
 }
@@ -396,6 +421,7 @@ func (s *GameService) RemoveKnownGameDir(dir string) error {
 		}
 	}
 
+	applog.Info("GameService", "已移除游戏路径记录: %s (当前生效: %s)", cleanDir, s.Config.GameDir)
 	return s.SaveConfig(s.Config)
 }
 

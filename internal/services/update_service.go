@@ -16,6 +16,7 @@ import (
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"rw_mod_manager/internal/applog"
 	"rw_mod_manager/internal/models"
 )
 
@@ -82,7 +83,9 @@ func (s *UpdateService) CheckForUpdates() (*models.UpdateInfo, error) {
 	go func() {
 		defer wg.Done()
 		info, err := s.CheckLanUpdate()
-		if err == nil && info != nil && info.HasUpdate {
+		if err != nil {
+			applog.Debug("UpdateService", "局域网更新探测未就绪: %v", err)
+		} else if info != nil && info.HasUpdate {
 			lanInfo = info
 		}
 	}()
@@ -91,7 +94,9 @@ func (s *UpdateService) CheckForUpdates() (*models.UpdateInfo, error) {
 	go func() {
 		defer wg.Done()
 		info, err := s.CheckGithubUpdate()
-		if err == nil && info != nil && info.HasUpdate {
+		if err != nil {
+			applog.Warn("UpdateService", "GitHub 更新检测失败: %v", err)
+		} else if info != nil && info.HasUpdate {
 			ghInfo = info
 		}
 	}()
@@ -378,12 +383,15 @@ func (s *UpdateService) DownloadAndApplyUpdate(source models.UpdateSource) error
 	_ = os.Remove(newExePath)
 
 	// 开始下载文件流
+	applog.Info("UpdateService", "开始下载更新包: source=%s, url=%s", source, downloadURL)
 	if err := s.DownloadUpdateFile(downloadURL, expectedSize, downloadPath); err != nil {
+		applog.Error("UpdateService", "下载更新包失败: %v", err)
 		return err
 	}
 
 	// 重命名为 .new 文件
 	if err := os.Rename(downloadPath, newExePath); err != nil {
+		applog.Error("UpdateService", "重命名更新包失败: %v", err)
 		return fmt.Errorf("准备新版本可执行文件失败: %w", err)
 	}
 

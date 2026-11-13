@@ -77,7 +77,9 @@ import {
   PushRequest,
   PushResult,
   UpdateInfo,
-  UpdateProgress
+  UpdateProgress,
+  LogInfo,
+  LogLevel
 } from './types/api'
 
 const api = useApi()
@@ -101,6 +103,7 @@ const gameStatus = ref<GameStatus>({
 })
 const appConfig = ref<AppConfig>({
   gameDir: '',
+  logLevel: 'info',
   launchConfig: {
     executableType: 'exe64',
     maxMemoryMb: 4096,
@@ -182,7 +185,7 @@ const pushHubType = ref<'mod' | 'map'>('mod')
 const pushHubTargetFile = ref<string>('')
 
 // 更新器状态
-const currentVersion = ref('1.2.6')
+const currentVersion = ref('1.3.0')
 const updateInfo = ref<UpdateInfo | null>(null)
 const updateProgress = ref<UpdateProgress | null>(null)
 const checkingUpdate = ref(false)
@@ -190,6 +193,51 @@ const updating = ref(false)
 const showUpdateModal = ref(false)
 const selectedUpdateSource = ref<'lan' | 'github'>('lan')
 const lastAutoPromptedVersion = ref<string>('')
+
+// 运行日志状态与等级选项
+const logInfo = ref<LogInfo>({
+  logLevel: 'info',
+  logFilePath: '',
+  logDir: '',
+  fileSize: 0
+})
+const changingLogLevel = ref(false)
+const logLevelOptions: Array<{
+  value: LogLevel
+  label: string
+  badge: string
+  desc: string
+  tone: string
+}> = [
+  {
+    value: 'debug',
+    label: '调试 (Debug)',
+    badge: '最详细',
+    desc: '记录完整运行细节、缓存状态、局域网与扫描过程（排错推荐）',
+    tone: 'text-sky-500 bg-sky-500/10'
+  },
+  {
+    value: 'info',
+    label: '信息 (Info)',
+    badge: '默认推荐',
+    desc: '记录启停、路径切换、模组/地图操作、启动与更新关键事件',
+    tone: 'text-m3-primary bg-blue-500/10'
+  },
+  {
+    value: 'warn',
+    label: '警告 (Warn)',
+    badge: '较精简',
+    desc: '仅记录非致命异常、重试警告与潜在冲突状态',
+    tone: 'text-amber-500 bg-amber-500/10'
+  },
+  {
+    value: 'error',
+    label: '错误 (Error)',
+    badge: '仅异常',
+    desc: '仅记录严重失败与崩溃错误，日志文件增长最慢',
+    tone: 'text-rose-500 bg-rose-500/10'
+  }
+]
 
 // 模组卡片点击详情弹窗状态
 const selectedModDetail = ref<ModItem | null>(null)
@@ -336,8 +384,10 @@ function formatBytes(bytes?: number | null) {
 }
 
 // 全局捕获异常，防止组件崩溃白屏/黑屏
-onErrorCaptured((err, instance, info) => {
+onErrorCaptured((err, _instance, info) => {
   console.error('[Vue Unhandled Error Guarded]:', err, info)
+  const detail = err instanceof Error ? (err.stack || err.message) : String(err)
+  api.writeClientLog('error', 'VueErrorCaptured', `${info} | ${detail}`)
   return false
 })
 
@@ -520,9 +570,9 @@ const groupedUnitModsWithMaps = computed(() => {
 })
 
 // 统计信息
-const enabledCount = computed(() => mods.value.filter(m => m.enabled).length)
-const activeMapCount = computed(() => maps.value.filter(m => m.active).length)
-const missingPreviewCount = computed(() => maps.value.filter(m => !m.hasPreview).length)
+const enabledCount = computed(() => (mods.value || []).filter(m => m && m.enabled).length)
+const activeMapCount = computed(() => (maps.value || []).filter(m => m && m.active).length)
+const missingPreviewCount = computed(() => (maps.value || []).filter(m => m && !m.hasPreview).length)
 
 // 加载全量数据
 async function loadAllData() {
@@ -536,19 +586,93 @@ async function loadAllData() {
         api.scanMods(),
         api.scanMaps()
       ])
-      mods.value = modList
-      maps.value = mapList
+      mods.value = modList || []
+      maps.value = mapList || []
       setTimeout(() => {
         api.freeMemory()
       }, 500)
+    } else {
+      mods.value = []
+      maps.value = []
     }
     if (lanStatus.value?.role && appConfig.value?.lanConfig) {
       appConfig.value.lanConfig.role = lanStatus.value.role
     }
+    await loadLogInfo()
   } catch (err) {
     console.error('加载数据失败:', err)
+    api.writeClientLog('error', 'loadAllData', err instanceof Error ? err.message : String(err))
   } finally {
     loading.value = false
+  }
+}
+
+// 获取当前日志配置与文件状态
+async function loadLogInfo() {
+  try {
+    const info = await api.getLogInfo()
+    if (info) {
+      logInfo.value = info
+      if (appConfig.value) {
+        appConfig.value.logLevel = info.logLevel
+      }
+    }
+  } catch (err) {
+    console.warn('获取日志状态失败:', err)
+  }
+}
+
+// 切换日志等级（实时生效并持久化）
+async function handleChangeLogLevel(level: LogLevel) {
+  if (changingLogLevel.value) return
+  changingLogLevel.value = true
+  try {
+    const info = await api.setLogLevel(level)
+    if (info) {
+      logInfo.value = info
+      if (appConfig.value) {
+        appConfig.value.logLevel = info.logLevel
+      }
+    }
+    const matched = logLevelOptions.find(o => o.value === level)
+    showNotice(`日志记录等级已切换为【${matched ? matched.label : level.toUpperCase()}】并立即生效`)
+  } catch (err) {
+    showNotice(`切换日志等级失败: ${err}`, 'error')
+  } finally {
+    changingLogLevel.value = false
+  }
+}
+
+// 在文件管理器中打开日志目录
+async function handleOpenLogFolder() {
+  try {
+    await api.openLogFolder()
+  } catch (err) {
+    showNotice(`打开日志目录失败: ${err}`, 'error')
+  }
+}
+
+// 使用系统默认文本程序打开日志文件
+async function handleOpenLogFile() {
+  try {
+    await api.openLogFile()
+  } catch (err) {
+    showNotice(`打开日志文件失败: ${err}`, 'error')
+  }
+}
+
+// 清空日志文件
+async function handleClearLogs() {
+  const ok = confirm('确定要清空当前日志文件及历史滚动备份吗？\n建议仅在确认无需排查旧问题或日志文件过大时执行。')
+  if (!ok) return
+  try {
+    const info = await api.clearLogs()
+    if (info) {
+      logInfo.value = info
+    }
+    showNotice('日志文件已清空并重建')
+  } catch (err) {
+    showNotice(`清空日志失败: ${err}`, 'error')
   }
 }
 
@@ -559,8 +683,8 @@ async function handleToggleMod(item: ModItem) {
   try {
     await api.toggleMod(item.fileName, target)
     // 联动更新地图中的激活状态
-    maps.value.forEach(m => {
-      if (m.parentModFile === item.fileName) {
+    (maps.value || []).forEach(m => {
+      if (m && m.parentModFile === item.fileName) {
         m.active = target
       }
     })
@@ -574,10 +698,10 @@ async function handleToggleMod(item: ModItem) {
 async function handleBatchToggle(enableAll: boolean) {
   loading.value = true
   try {
-    await api.batchToggleMods(enableAll)
-    mods.value.forEach(m => (m.enabled = enableAll))
-    maps.value.forEach(m => {
-      if (m.locationType === 'unit_mod') {
+    await api.batchToggleMods(enableAll);
+    (mods.value || []).forEach(m => { if (m) m.enabled = enableAll });
+    (maps.value || []).forEach(m => {
+      if (m && m.locationType === 'unit_mod') {
         m.active = enableAll
       }
     })
@@ -594,12 +718,12 @@ async function handleActivateParentMod(parentModFile: string) {
   loading.value = true
   try {
     await api.activateMapParentMod(parentModFile)
-    const targetMod = mods.value.find(m => m.fileName === parentModFile)
+    const targetMod = (mods.value || []).find(m => m && m.fileName === parentModFile)
     if (targetMod) {
       targetMod.enabled = true
     }
-    maps.value.forEach(m => {
-      if (m.parentModFile === parentModFile) {
+    (maps.value || []).forEach(m => {
+      if (m && m.parentModFile === parentModFile) {
         m.active = true
       }
     })
@@ -969,18 +1093,18 @@ async function handlePushHubSend() {
   let size = 0
 
   if (pushHubType.value === 'mod') {
-    const item = mods.value.find(m => m.fileName === pushHubTargetFile.value)
+    const item = (mods.value || []).find(m => m && m.fileName === pushHubTargetFile.value)
     if (item) {
       targetName = item.fileName
       size = item.fileSize
     }
   } else {
-    const item = maps.value.find(m => m.id === pushHubTargetFile.value || m.fileName === pushHubTargetFile.value)
+    const item = (maps.value || []).find(m => m && (m.id === pushHubTargetFile.value || m.fileName === pushHubTargetFile.value))
     if (item) {
       if (item.locationType === 'unit_mod' && item.parentModFile) {
         targetType = 'mod'
         targetName = item.parentModFile
-        const parentMod = mods.value.find(m => m.fileName === item.parentModFile)
+        const parentMod = (mods.value || []).find(m => m && m.fileName === item.parentModFile)
         size = parentMod ? parentMod.fileSize : item.fileSize
       } else if (item.locationType === 'map_pack' && item.packName) {
         targetType = 'map'
@@ -1692,7 +1816,7 @@ onUnmounted(() => {
           <Package class="w-4 h-4" />
           <span>单位模组 (Units)</span>
           <span class="px-2 py-0.5 rounded-full bg-m3-surface-container text-[11px] font-mono font-medium text-m3-on-surface-variant border border-m3-outline">
-            {{ enabledCount }} / {{ mods.length }}
+            {{ enabledCount }} / {{ mods?.length || 0 }}
           </span>
         </button>
 
@@ -1704,7 +1828,7 @@ onUnmounted(() => {
           <MapIcon class="w-4 h-4" />
           <span>地图工坊 (Maps)</span>
           <span class="px-2 py-0.5 rounded-full bg-m3-surface-container text-[11px] font-mono font-medium text-m3-on-surface-variant border border-m3-outline">
-            {{ activeMapCount }} / {{ maps.length }} 就绪
+            {{ activeMapCount }} / {{ maps?.length || 0 }} 就绪
           </span>
           <span v-if="missingPreviewCount > 0" class="px-2 py-0.5 rounded-full bg-m3-warning-container text-[11px] font-medium text-m3-on-warning-container border border-m3-warning/30">
             {{ missingPreviewCount }} 缺图
@@ -1758,7 +1882,7 @@ onUnmounted(() => {
         </button>
 
         <button
-          @click="currentTab = 'settings'"
+          @click="currentTab = 'settings'; loadLogInfo()"
           class="flex items-center gap-2.5 py-3 px-4 border-b-2 text-xs font-medium transition"
           :class="currentTab === 'settings' ? 'border-m3-primary text-m3-primary font-semibold' : 'border-transparent text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-container/40 rounded-t-lg'"
         >
@@ -1864,7 +1988,7 @@ onUnmounted(() => {
                 class="px-3 py-1.5 rounded-lg font-medium transition"
                 :class="modFilterStatus === 'all' ? 'bg-m3-surface-highest text-m3-on-surface font-semibold shadow-sm' : 'text-m3-on-surface-variant hover:text-m3-on-surface'"
               >
-                全部 ({{ mods.length }})
+                全部 ({{ mods?.length || 0 }})
               </button>
               <button
                 @click="modFilterStatus = 'enabled'"
@@ -1878,7 +2002,7 @@ onUnmounted(() => {
                 class="px-3 py-1.5 rounded-lg font-medium transition"
                 :class="modFilterStatus === 'disabled' ? 'bg-m3-surface-highest text-m3-error font-semibold shadow-sm' : 'text-m3-on-surface-variant hover:text-m3-on-surface'"
               >
-                已禁用 ({{ mods.length - enabledCount }})
+                已禁用 ({{ (mods?.length || 0) - enabledCount }})
               </button>
             </div>
 
@@ -2181,7 +2305,7 @@ onUnmounted(() => {
                 class="px-3 py-1.5 rounded-lg font-medium transition"
                 :class="mapFilterActive === 'all' ? 'bg-m3-surface-highest text-m3-on-surface font-semibold shadow-sm' : 'text-m3-on-surface-variant hover:text-m3-on-surface'"
               >
-                全部 ({{ maps.length }})
+                全部 ({{ maps?.length || 0 }})
               </button>
               <button
                 @click="mapFilterActive = 'active'"
@@ -2195,7 +2319,7 @@ onUnmounted(() => {
                 class="px-3 py-1.5 rounded-lg font-medium transition"
                 :class="mapFilterActive === 'inactive' ? 'bg-m3-surface-highest text-m3-error font-semibold shadow-sm' : 'text-m3-on-surface-variant hover:text-m3-on-surface'"
               >
-                未激活 ({{ maps.length - activeMapCount }})
+                未激活 ({{ (maps?.length || 0) - activeMapCount }})
               </button>
             </div>
 
@@ -3143,14 +3267,14 @@ onUnmounted(() => {
                       :class="pushHubType === 'mod' ? 'bg-m3-primary text-white font-bold' : 'text-m3-on-surface-variant hover:text-m3-on-surface'"
                       class="px-2 py-0.5 rounded-md transition"
                     >
-                      模组 ({{ mods.length }})
+                      模组 ({{ mods?.length || 0 }})
                     </button>
                     <button
                       @click="pushHubType = 'map'; pushHubTargetFile = ''"
                       :class="pushHubType === 'map' ? 'bg-m3-primary text-white font-bold' : 'text-m3-on-surface-variant hover:text-m3-on-surface'"
                       class="px-2 py-0.5 rounded-md transition"
                     >
-                      地图 ({{ maps.length }})
+                      地图 ({{ maps?.length || 0 }})
                     </button>
                   </div>
                 </div>
@@ -3792,6 +3916,102 @@ onUnmounted(() => {
             </div>
           </div>
 
+          <!-- 运行日志与故障排查 (M3 Logging Settings Card) -->
+          <div class="p-5 bg-m3-surface-container border border-m3-outline rounded-2xl space-y-4">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-m3-outline-variant pb-3">
+              <div>
+                <h3 class="text-xs font-semibold text-m3-on-surface flex items-center gap-2">
+                  <FileText class="w-4 h-4 text-m3-primary" />
+                  运行日志与故障排查
+                  <span class="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-m3-primary/10 text-m3-primary uppercase">
+                    {{ logInfo.logLevel }}
+                  </span>
+                </h3>
+                <p class="text-[11px] text-m3-on-surface-variant mt-0.5">
+                  软件会自动维护滚动日志文件（单文件上限 5MB，保留最近 3 份备份）。遇到 Bug 时可将等级调为 Debug 复现并将日志文件发给开发者定位。
+                </p>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <span class="text-[11px] font-mono text-m3-on-surface-dim px-2 py-1 rounded-lg bg-m3-surface-high border border-m3-outline-variant">
+                  累计 {{ formatBytes(logInfo.fileSize) }}
+                </span>
+                <button
+                  @click="loadLogInfo()"
+                  class="p-1.5 rounded-lg bg-m3-surface-high hover:bg-m3-surface-highest border border-m3-outline text-m3-on-surface-variant hover:text-m3-on-surface transition"
+                  title="刷新日志文件大小"
+                >
+                  <RefreshCw class="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            <!-- 日志等级选择 -->
+            <div class="space-y-2">
+              <label class="text-xs font-medium text-m3-on-surface block">日志记录等级（即时生效并自动保存）</label>
+              <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                <button
+                  v-for="opt in logLevelOptions"
+                  :key="opt.value"
+                  @click="handleChangeLogLevel(opt.value)"
+                  :disabled="changingLogLevel"
+                  class="p-3 rounded-xl border text-left transition flex flex-col gap-1.5 relative disabled:opacity-60"
+                  :class="logInfo.logLevel === opt.value ? 'bg-m3-primary/10 border-m3-primary shadow-sm ring-1 ring-m3-primary' : 'bg-m3-surface-high border-m3-outline-variant hover:border-m3-outline'"
+                >
+                  <div class="flex items-center justify-between gap-1">
+                    <span class="text-[10px] font-semibold px-1.5 py-0.5 rounded" :class="opt.tone">
+                      {{ opt.badge }}
+                    </span>
+                    <Check v-if="logInfo.logLevel === opt.value" class="w-3.5 h-3.5 text-m3-primary shrink-0" />
+                  </div>
+                  <div class="text-xs font-bold text-m3-on-surface">{{ opt.label }}</div>
+                  <div class="text-[11px] text-m3-on-surface-variant leading-relaxed">{{ opt.desc }}</div>
+                </button>
+              </div>
+            </div>
+
+            <!-- 日志文件路径与快捷操作 -->
+            <div class="p-3.5 bg-m3-surface-high border border-m3-outline-variant rounded-xl space-y-2.5">
+              <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                <span class="font-semibold text-m3-on-surface">当前活跃日志文件位置：</span>
+                <div class="flex flex-wrap items-center gap-2">
+                  <button
+                    @click="handleOpenLogFile"
+                    class="px-2.5 py-1 rounded-lg bg-m3-surface-container hover:bg-m3-surface-highest border border-m3-outline text-xs text-m3-primary font-medium transition flex items-center gap-1"
+                  >
+                    <ExternalLink class="w-3.5 h-3.5" />
+                    <span>打开日志文件</span>
+                  </button>
+                  <button
+                    @click="handleOpenLogFolder"
+                    class="px-2.5 py-1 rounded-lg bg-m3-surface-container hover:bg-m3-surface-highest border border-m3-outline text-xs text-m3-on-surface font-medium transition flex items-center gap-1"
+                  >
+                    <FolderOpen class="w-3.5 h-3.5" />
+                    <span>打开日志目录</span>
+                  </button>
+                  <button
+                    @click="handleClearLogs"
+                    class="px-2.5 py-1 rounded-lg bg-m3-surface-container hover:bg-m3-error-container border border-m3-outline text-xs text-m3-error font-medium transition flex items-center gap-1"
+                  >
+                    <Trash2 class="w-3.5 h-3.5" />
+                    <span>清空日志</span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="font-mono text-xs text-m3-on-surface break-all select-all p-2 rounded-lg bg-m3-surface-container border border-m3-outline/60 flex items-center justify-between gap-2">
+                <span>{{ logInfo.logFilePath || '初始化中...' }}</span>
+                <button
+                  v-if="logInfo.logFilePath"
+                  @click="handleCopyPath(logInfo.logFilePath)"
+                  class="p-1 text-m3-on-surface-dim hover:text-m3-on-surface transition shrink-0"
+                  title="复制日志文件路径"
+                >
+                  <Copy class="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          </div>
+
           <!-- 游戏路径探测与多安装管理卡片 (类似 L4D2 VPK Manager) -->
           <div class="p-5 bg-m3-surface-container border border-m3-outline rounded-2xl space-y-4">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-m3-outline-variant pb-3">
@@ -3966,14 +4186,14 @@ onUnmounted(() => {
               <div class="flex items-center justify-between p-3 bg-m3-surface-high border border-m3-outline-variant rounded-xl">
                 <span class="text-m3-on-surface text-xs font-sans">mods/units (单位模组目录)</span>
                 <span class="flex items-center gap-2 text-m3-primary font-medium text-xs">
-                  已加载 {{ mods.length }} 个模组 ({{ enabledCount }} 启用)
+                  已加载 {{ mods?.length || 0 }} 个模组 ({{ enabledCount }} 启用)
                 </span>
               </div>
 
               <div class="flex items-center justify-between p-3 bg-m3-surface-high border border-m3-outline-variant rounded-xl">
                 <span class="text-m3-on-surface text-xs font-sans">mods/maps (地图全量检索，含模组内嵌)</span>
                 <span class="flex items-center gap-2 text-m3-primary font-medium text-xs">
-                  共计 {{ maps.length }} 张地图 ({{ activeMapCount }} 可用)
+                  共计 {{ maps?.length || 0 }} 张地图 ({{ activeMapCount }} 可用)
                 </span>
               </div>
             </div>

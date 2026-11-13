@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-v1.2.6-blue.svg?style=flat-square)
+![Version](https://img.shields.io/badge/version-v1.3.0-blue.svg?style=flat-square)
 ![Go](https://img.shields.io/badge/Go-1.22+-00ADD8.svg?style=flat-square&logo=go)
 ![Wails](https://img.shields.io/badge/Wails-v2-DF1A55.svg?style=flat-square&logo=wails)
 ![Vue 3](https://img.shields.io/badge/Vue-3.4+-4FC08D.svg?style=flat-square&logo=vue.js)
@@ -52,7 +52,17 @@
   - 顶栏状态胶囊（Chip）结合快速切换弹窗，支持分类展示来源标签（Steam 官方、运行中进程、各盘符扫描、自定义添加）、游戏版本构建号、模组与地图就绪数量。
   - 一键秒级切换生效客户端，模组列表、战术出生点地图、联机动态预设全自动即时热重载，无需重启应用程序。
 
-### 6. 🎨 现代 Material Design 3 暗色美学设计
+### 6. 📝 运行日志系统与实时排错面板 (Application Logging & Diagnostics)
+- **多等级实时调节**：支持 Debug、Info、Warn、Error 四级日志自由切换，配置实时生效并持久化至 `config.json`。
+- **自动文件轮转**：单日志文件超出 5MB 自动分卷滚动备份（保留最近 3 份历史），防止日志无限制膨胀。
+- **一键诊断与文件定位**：集成在系统设置面板中，支持一键在系统资源管理器中选定高亮日志文件、系统默认文本程序打开查看、以及一键清空日志文件。
+- **前端异常捕获链路**：通过 Vue 全局错误拦截器与 Window 级未捕获异常监听，将前端报错自动回传写入后端日志，便于快速排查故障。
+
+### 7. 🛡️ 异常防御与空目录健壮性 (Robust Error Guarding)
+- **非空切片保证**：对无模组、无地图或全新安装的空模组目录做到底层非空数组切片（`[]`）保障，杜绝 JSON `null` 导致的客户端渲染异常。
+- **全局渲染安全边界**：全链路采用可选链及空值兜底，模组与地图列表在任何极端或缺失目录下均能稳定降级。
+
+### 8. 🎨 现代 Material Design 3 暗色美学设计
 - 采用 M3 设计语言，支持状态胶囊（Chip）、精致暗调表面海拔高度、骨架屏加载反馈与全局无感 Toast 提示。
 
 ---
@@ -163,7 +173,7 @@ go test -v ./...
 本软件配备了完善的自更新系统。**在后续任何代码修改与功能迭代时，请务必遵循以下版本更新规范：**
 
 ### 📌 版本号定义位置清单 (Version Bump Checklist)
-当有新功能开发、缺陷修复或功能调整时，必须同步将以下 3 处版本号升级（遵循 [语义化版本规范 SemVer](https://semver.org/)，如 `1.0.0` $\rightarrow$ `1.0.1`）：
+当有新功能开发、缺陷修复或功能调整时，必须同步将以下位置版本号升级（遵循 [语义化版本规范 SemVer](https://semver.org/)，如 `1.2.6` $\rightarrow$ `1.3.0`）：
 
 1. **后端版本常量**：
    - 文件：[`internal/models/update.go`](internal/models/update.go)
@@ -171,9 +181,10 @@ go test -v ./...
 2. **Wails 清单文件**：
    - 文件：[`wails.json`](wails.json)
    - 字段：`"info": { "productVersion": "X.Y.Z" }`
-3. **前端工程配置**：
-   - 文件：[`frontend/package.json`](frontend/package.json)
-   - 字段：`"version": "X.Y.Z"`
+3. **前端工程配置与视图**：
+   - 文件：[`frontend/package.json`](frontend/package.json) (`"version": "X.Y.Z"`)
+   - 视图：[`frontend/src/App.vue`](frontend/src/App.vue) (`const currentVersion = ref('X.Y.Z')`)
+   - 接口：[`frontend/src/composables/useApi.ts`](frontend/src/composables/useApi.ts) (`getCurrentVersion` 默认值)
 
 ---
 

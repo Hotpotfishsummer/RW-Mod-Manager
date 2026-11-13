@@ -19,6 +19,8 @@ export function BatchToggleMods(arg1:boolean):Promise<void>;
 
 export function CheckForUpdates():Promise<models.UpdateInfo>;
 
+export function ClearLogs():Promise<models.LogInfo>;
+
 export function ComparePresetWithServer(arg1:string,arg2:number):Promise<models.SyncDiff>;
 
 export function DetectGameDirs():Promise<Array<models.GamePathItem>>;
@@ -47,6 +49,8 @@ export function GetLanConfig():Promise<models.LanConfig>;
 
 export function GetLanStatus():Promise<models.LanStatus>;
 
+export function GetLogInfo():Promise<models.LogInfo>;
+
 export function GetNetworkInterfaces():Promise<Array<models.NetworkInterfaceInfo>>;
 
 export function GetPendingPushRequests():Promise<Array<models.PushRequest>>;
@@ -60,6 +64,10 @@ export function LaunchGameOnline():Promise<void>;
 export function LaunchGameSingle():Promise<void>;
 
 export function OpenFolder(arg1:string):Promise<void>;
+
+export function OpenLogFile():Promise<void>;
+
+export function OpenLogFolder():Promise<void>;
 
 export function OpenPath(arg1:string):Promise<void>;
 
@@ -83,6 +91,8 @@ export function SelectGameDir():Promise<string>;
 
 export function SetGameDir(arg1:string):Promise<models.GameStatus>;
 
+export function SetLogLevel(arg1:string):Promise<models.LogInfo>;
+
 export function SwitchGameDir(arg1:string):Promise<models.GameStatus>;
 
 export function SwitchLanRole(arg1:string):Promise<void>;
@@ -90,3 +100,5 @@ export function SwitchLanRole(arg1:string):Promise<void>;
 export function SyncFromHost(arg1:string,arg2:number):Promise<void>;
 
 export function ToggleMod(arg1:string,arg2:boolean):Promise<void>;
+
+export function WriteClientLog(arg1:string,arg2:string,arg3:string):Promise<void>;

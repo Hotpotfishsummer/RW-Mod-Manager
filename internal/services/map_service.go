@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 
+	"rw_mod_manager/internal/applog"
 	"rw_mod_manager/internal/models"
 )
 
@@ -47,7 +48,7 @@ var (
 
 // ScanMaps 扫描独立地图与所有 rwmod 包中附带的地图，并标识其在游戏中的激活状态 (带有持久化缓存与零内存膨胀流式图片)
 func (s *MapService) ScanMaps(gameDir string) ([]models.MapItem, error) {
-	var allMaps []models.MapItem
+	allMaps := make([]models.MapItem, 0)
 	cm := GetCacheManager()
 
 	// 1. 读取 preferences.ini 中的模组启用状态映射
@@ -148,6 +149,7 @@ func (s *MapService) ScanMaps(gameDir string) ([]models.MapItem, error) {
 	// 异步持久化保存地图缓存
 	cm.SaveMapCache()
 
+	applog.Debug("MapService", "扫描地图完成: dir=%s, count=%d", gameDir, len(allMaps))
 	return allMaps, nil
 }
 

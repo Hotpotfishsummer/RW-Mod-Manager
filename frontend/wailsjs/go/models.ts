@@ -85,6 +85,7 @@ export namespace models {
 	export class AppConfig {
 	    gameDir: string;
 	    knownGameDirs?: string[];
+	    logLevel: string;
 	    launchConfig: LaunchConfig;
 	    gamePreferences: GamePreferences;
 	    lanConfig: LanConfig;
@@ -97,6 +98,7 @@ export namespace models {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.gameDir = source["gameDir"];
 	        this.knownGameDirs = source["knownGameDirs"];
+	        this.logLevel = source["logLevel"];
 	        this.launchConfig = this.convertValues(source["launchConfig"], LaunchConfig);
 	        this.gamePreferences = this.convertValues(source["gamePreferences"], GamePreferences);
 	        this.lanConfig = this.convertValues(source["lanConfig"], LanConfig);
@@ -348,6 +350,24 @@ export namespace models {
 		    }
 		    return a;
 		}
+	}
+	export class LogInfo {
+	    logLevel: string;
+	    logFilePath: string;
+	    logDir: string;
+	    fileSize: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new LogInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.logLevel = source["logLevel"];
+	        this.logFilePath = source["logFilePath"];
+	        this.logDir = source["logDir"];
+	        this.fileSize = source["fileSize"];
+	    }
 	}
 	export class MapItem {
 	    id: string;

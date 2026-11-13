@@ -224,3 +224,33 @@ func TestContentHashAndOutdatedModSync(t *testing.T) {
 	}
 	t.Logf("ContentHash changed successfully from %s to %s", hash1, hash2)
 }
+
+func TestGameServiceLogLevelPersistence(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	svc := &GameService{
+		configPath: cfgPath,
+		Config: models.AppConfig{
+			LogLevel: "info",
+		},
+	}
+
+	cfg := svc.Config
+	cfg.LogLevel = "DEBUG"
+	if err := svc.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig failed: %v", err)
+	}
+	if svc.Config.LogLevel != "debug" {
+		t.Fatalf("expected normalized LogLevel 'debug', got %q", svc.Config.LogLevel)
+	}
+
+	reloaded := &GameService{
+		configPath: cfgPath,
+		Config: models.AppConfig{
+			LogLevel: "info",
+		},
+	}
+	reloaded.LoadConfig()
+	if reloaded.Config.LogLevel != "debug" {
+		t.Fatalf("expected reloaded LogLevel 'debug', got %q", reloaded.Config.LogLevel)
+	}
+}

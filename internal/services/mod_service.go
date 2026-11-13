@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"rw_mod_manager/internal/applog"
 	"rw_mod_manager/internal/models"
 )
 
@@ -34,7 +35,11 @@ func (s *ModService) ScanMods(gameDir string) ([]models.ModItem, error) {
 	unitsDir := filepath.Join(gameDir, "mods", "units")
 	entries, err := os.ReadDir(unitsDir)
 	if err != nil {
-		return nil, err
+		if os.IsNotExist(err) {
+			_ = os.MkdirAll(unitsDir, 0755)
+			return make([]models.ModItem, 0), nil
+		}
+		return make([]models.ModItem, 0), err
 	}
 
 	// 先读取当前 preferences.ini 中记录的状态映射
@@ -110,14 +115,15 @@ func (s *ModService) ScanMods(gameDir string) ([]models.ModItem, error) {
 	cm.PruneMods(existingNames)
 	cm.SaveModCache()
 
-	// 过滤有效项（去掉空项）
-	var finalMods []models.ModItem
+	// 过滤有效项（去掉空项，确保返回非 nil 切片避免前端 JSON 反序列化得到 null）
+	finalMods := make([]models.ModItem, 0)
 	for _, m := range results {
 		if m.FileName != "" {
 			finalMods = append(finalMods, m)
 		}
 	}
 
+	applog.Debug("ModService", "扫描单位模组完成: dir=%s, count=%d", unitsDir, len(finalMods))
 	return finalMods, nil
 }
 
@@ -567,8 +573,10 @@ func (s *ModService) ArchiveMod(gameDir string, fileName string, permanently boo
 
 	if permanently {
 		if err := os.RemoveAll(targetPath); err != nil {
+			applog.Error("ModService", "彻底删除模组 %s 失败: %v", cleanName, err)
 			return fmt.Errorf("删除模组文件失败: %w", err)
 		}
+		applog.Info("ModService", "已彻底删除模组: %s", cleanName)
 	} else {
 		archiveDir := filepath.Join(gameDir, "mods", "_archived", "units")
 		if err := os.MkdirAll(archiveDir, 0755); err != nil {

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"rw_mod_manager/internal/applog"
 	"rw_mod_manager/internal/models"
 )
 
@@ -126,5 +127,14 @@ func (s *LaunchService) LaunchGame(gameDir string, cfg models.LaunchConfig) erro
 	}
 
 	// 非阻塞异步启动
-	return cmd.Start()
+	applog.Info("LaunchService", "拉起游戏进程: type=%s, dir=%s, exe=%s", cfg.ExecutableType, gameDir, cmd.Path)
+	applog.Debug("LaunchService", "启动参数: %v", cmd.Args)
+	if err := cmd.Start(); err != nil {
+		applog.Error("LaunchService", "启动游戏进程失败: %v", err)
+		return err
+	}
+	if cmd.Process != nil {
+		applog.Info("LaunchService", "游戏进程已启动, PID=%d", cmd.Process.Pid)
+	}
+	return nil
 }

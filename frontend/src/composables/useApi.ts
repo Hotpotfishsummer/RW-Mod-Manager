@@ -14,7 +14,8 @@ import {
   PushRequest,
   PushResult,
   UpdateInfo,
-  UpdateProgress
+  LogInfo,
+  LogLevel
 } from '../types/api'
 
 declare global {
@@ -64,6 +65,12 @@ declare global {
           CheckForUpdates(): Promise<UpdateInfo>
           DownloadAndApplyUpdate(source: string): Promise<void>
           GetCurrentVersion(): Promise<string>
+          GetLogInfo(): Promise<LogInfo>
+          SetLogLevel(level: string): Promise<LogInfo>
+          OpenLogFolder(): Promise<void>
+          OpenLogFile(): Promise<void>
+          ClearLogs(): Promise<LogInfo>
+          WriteClientLog(level: string, source: string, message: string): Promise<void>
           FreeMemory(): Promise<void>
         }
       }
@@ -78,6 +85,7 @@ export function useApi() {
     if (isWails()) return window.go!.main.App.GetConfig()
     return {
       gameDir: 'E:\\Rusted Warfare\\Rusted Warfare',
+      logLevel: 'info',
       launchConfig: {
         executableType: 'exe64',
         maxMemoryMb: 4096,
@@ -152,7 +160,10 @@ export function useApi() {
   }
 
   const detectGameDirs = async (): Promise<GamePathItem[]> => {
-    if (isWails()) return window.go!.main.App.DetectGameDirs()
+    if (isWails()) {
+      const res = await window.go!.main.App.DetectGameDirs()
+      return res || []
+    }
     return [
       {
         path: 'E:\\Rusted Warfare\\Rusted Warfare',
@@ -178,7 +189,10 @@ export function useApi() {
   }
 
   const getKnownGameDirs = async (): Promise<GamePathItem[]> => {
-    if (isWails()) return window.go!.main.App.GetKnownGameDirs()
+    if (isWails()) {
+      const res = await window.go!.main.App.GetKnownGameDirs()
+      return res || []
+    }
     return [
       {
         path: 'E:\\Rusted Warfare\\Rusted Warfare',
@@ -213,7 +227,10 @@ export function useApi() {
   }
 
   const removeKnownGameDir = async (dir: string): Promise<GamePathItem[]> => {
-    if (isWails()) return window.go!.main.App.RemoveKnownGameDir(dir)
+    if (isWails()) {
+      const res = await window.go!.main.App.RemoveKnownGameDir(dir)
+      return res || []
+    }
     return []
   }
 
@@ -223,7 +240,10 @@ export function useApi() {
   }
 
   const scanMods = async (): Promise<ModItem[]> => {
-    if (isWails()) return window.go!.main.App.ScanMods()
+    if (isWails()) {
+      const res = await window.go!.main.App.ScanMods()
+      return res || []
+    }
     return []
   }
 
@@ -243,7 +263,10 @@ export function useApi() {
   }
 
   const scanMaps = async (): Promise<MapItem[]> => {
-    if (isWails()) return window.go!.main.App.ScanMaps()
+    if (isWails()) {
+      const res = await window.go!.main.App.ScanMaps()
+      return res || []
+    }
     return []
   }
 
@@ -550,11 +573,58 @@ export function useApi() {
 
   const getCurrentVersion = async (): Promise<string> => {
     if (isWails()) return window.go!.main.App.GetCurrentVersion()
-    return '1.2.6'
+    return '1.3.0'
   }
 
   const freeMemory = async (): Promise<void> => {
     if (isWails()) return (window.go!.main.App as any).FreeMemory()
+  }
+
+  const getLogInfo = async (): Promise<LogInfo> => {
+    if (isWails()) return window.go!.main.App.GetLogInfo()
+    return {
+      logLevel: 'info',
+      logFilePath: 'C:\\Users\\Demo\\AppData\\Roaming\\RWModManager\\logs\\app.log',
+      logDir: 'C:\\Users\\Demo\\AppData\\Roaming\\RWModManager\\logs',
+      fileSize: 4096
+    }
+  }
+
+  const setLogLevel = async (level: LogLevel): Promise<LogInfo> => {
+    if (isWails()) return window.go!.main.App.SetLogLevel(level)
+    console.log('Mock setLogLevel:', level)
+    return {
+      logLevel: level,
+      logFilePath: 'C:\\Users\\Demo\\AppData\\Roaming\\RWModManager\\logs\\app.log',
+      logDir: 'C:\\Users\\Demo\\AppData\\Roaming\\RWModManager\\logs',
+      fileSize: 4096
+    }
+  }
+
+  const openLogFolder = async (): Promise<void> => {
+    if (isWails()) return window.go!.main.App.OpenLogFolder()
+    console.log('Mock openLogFolder')
+  }
+
+  const openLogFile = async (): Promise<void> => {
+    if (isWails()) return window.go!.main.App.OpenLogFile()
+    console.log('Mock openLogFile')
+  }
+
+  const clearLogs = async (): Promise<LogInfo> => {
+    if (isWails()) return window.go!.main.App.ClearLogs()
+    return {
+      logLevel: 'info',
+      logFilePath: 'C:\\Users\\Demo\\AppData\\Roaming\\RWModManager\\logs\\app.log',
+      logDir: 'C:\\Users\\Demo\\AppData\\Roaming\\RWModManager\\logs',
+      fileSize: 128
+    }
+  }
+
+  const writeClientLog = async (level: LogLevel, source: string, message: string): Promise<void> => {
+    if (isWails() && window.go?.main?.App?.WriteClientLog) {
+      return window.go.main.App.WriteClientLog(level, source, message).catch(() => {})
+    }
   }
 
   return {
@@ -602,6 +672,13 @@ export function useApi() {
     checkForUpdates,
     downloadAndApplyUpdate,
     getCurrentVersion,
+    // Logging
+    getLogInfo,
+    setLogLevel,
+    openLogFolder,
+    openLogFile,
+    clearLogs,
+    writeClientLog,
     freeMemory
   }
 }

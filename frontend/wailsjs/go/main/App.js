@@ -34,6 +34,10 @@ export function CheckForUpdates() {
   return window['go']['main']['App']['CheckForUpdates']();
 }
 
+export function ClearLogs() {
+  return window['go']['main']['App']['ClearLogs']();
+}
+
 export function ComparePresetWithServer(arg1, arg2) {
   return window['go']['main']['App']['ComparePresetWithServer'](arg1, arg2);
 }
@@ -90,6 +94,10 @@ export function GetLanStatus() {
   return window['go']['main']['App']['GetLanStatus']();
 }
 
+export function GetLogInfo() {
+  return window['go']['main']['App']['GetLogInfo']();
+}
+
 export function GetNetworkInterfaces() {
   return window['go']['main']['App']['GetNetworkInterfaces']();
 }
@@ -116,6 +124,14 @@ export function LaunchGameSingle() {
 
 export function OpenFolder(arg1) {
   return window['go']['main']['App']['OpenFolder'](arg1);
+}
+
+export function OpenLogFile() {
+  return window['go']['main']['App']['OpenLogFile']();
+}
+
+export function OpenLogFolder() {
+  return window['go']['main']['App']['OpenLogFolder']();
 }
 
 export function OpenPath(arg1) {
@@ -162,6 +178,10 @@ export function SetGameDir(arg1) {
   return window['go']['main']['App']['SetGameDir'](arg1);
 }
 
+export function SetLogLevel(arg1) {
+  return window['go']['main']['App']['SetLogLevel'](arg1);
+}
+
 export function SwitchGameDir(arg1) {
   return window['go']['main']['App']['SwitchGameDir'](arg1);
 }
@@ -176,4 +196,8 @@ export function SyncFromHost(arg1, arg2) {
 
 export function ToggleMod(arg1, arg2) {
   return window['go']['main']['App']['ToggleMod'](arg1, arg2);
+}
+
+export function WriteClientLog(arg1, arg2, arg3) {
+  return window['go']['main']['App']['WriteClientLog'](arg1, arg2, arg3);
 }

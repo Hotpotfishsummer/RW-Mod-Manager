@@ -83,9 +83,19 @@ export interface GamePathItem {
   lastUsed?: number
 }
 
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
+
+export interface LogInfo {
+  logLevel: LogLevel
+  logFilePath: string
+  logDir: string
+  fileSize: number
+}
+
 export interface AppConfig {
   gameDir: string
   knownGameDirs?: string[]
+  logLevel?: LogLevel
   launchConfig: LaunchConfig
   gamePreferences: GamePreferences
   lanConfig: LanConfig

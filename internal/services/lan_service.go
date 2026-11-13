@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"rw_mod_manager/internal/applog"
 	"rw_mod_manager/internal/models"
 )
 
@@ -195,6 +196,7 @@ func (s *LanService) SaveLanConfig(cfg models.LanConfig) error {
 
 // SwitchRole 快速切换客户端/服务端角色，并立即触发局域网心跳
 func (s *LanService) SwitchRole(newRole models.LanRole) error {
+	applog.Info("LanService", "切换局域网角色: %s -> %s", s.gameService.Config.LanConfig.Role, newRole)
 	s.mu.Lock()
 	s.gameService.Config.LanConfig.Role = newRole
 	s.mu.Unlock()
@@ -522,11 +524,14 @@ func (s *LanService) SyncWithServer(serverIP string, serverPort int) error {
 	_ = os.MkdirAll(unitsDir, 0755)
 	_ = os.MkdirAll(mapsDir, 0755)
 
+	applog.Info("LanService", "开始从服务端 %s:%d 同步预设 (缺失模组=%d, 缺失地图=%d)", serverIP, serverPort, len(diff.MissingMods), len(diff.MissingMaps))
+
 	// 1. 下载缺失的模组
 	for _, m := range diff.MissingMods {
 		fileURL := fmt.Sprintf("http://%s:%d/api/lan/file?type=mod&name=%s", serverIP, serverPort, url.QueryEscape(m.FileName))
 		targetPath := filepath.Join(unitsDir, m.FileName)
 		if err := s.downloadFile(fileURL, targetPath, m.IsDir); err != nil {
+			applog.Error("LanService", "下载模组 %s 失败: %v", m.FileName, err)
 			return fmt.Errorf("下载模组 %s 失败: %w", m.FileName, err)
 		}
 	}
@@ -536,6 +541,7 @@ func (s *LanService) SyncWithServer(serverIP string, serverPort int) error {
 		fileURL := fmt.Sprintf("http://%s:%d/api/lan/file?type=map&name=%s", serverIP, serverPort, url.QueryEscape(mp.FileName))
 		targetPath := filepath.Join(mapsDir, mp.FileName)
 		if err := s.downloadFile(fileURL, targetPath, false); err != nil {
+			applog.Error("LanService", "下载地图 %s 失败: %v", mp.FileName, err)
 			return fmt.Errorf("下载地图 %s 失败: %w", mp.FileName, err)
 		}
 	}
@@ -919,9 +925,10 @@ func (s *LanService) startUdpListener() {
 
 	packetConn, err := lc.ListenPacket(s.ctx, "udp4", fmt.Sprintf("0.0.0.0:%d", listenPort))
 	if err != nil {
-		fmt.Printf("[LAN] 监听 UDP 广播端口 %d 失败: %v\n", listenPort, err)
+		applog.Error("LanService", "监听 UDP 广播端口 %d 失败: %v", listenPort, err)
 		return
 	}
+	applog.Info("LanService", "UDP 广播监听已启动: 0.0.0.0:%d", listenPort)
 	s.mu.Lock()
 	s.packetConn = packetConn
 	s.mu.Unlock()
@@ -1691,12 +1698,16 @@ func (s *LanService) startHttpServer() {
 			s.actualPort = p
 			s.httpSrv = &http.Server{Handler: mux}
 			s.mu.Unlock()
+			applog.Info("LanService", "局域网 HTTP API 服务已启动: port=%d", p)
 			go func() {
-				_ = s.httpSrv.Serve(listener)
+				if err := s.httpSrv.Serve(listener); err != nil && err != http.ErrServerClosed {
+					applog.Error("LanService", "HTTP 服务异常退出: %v", err)
+				}
 			}()
 			return
 		}
 	}
+	applog.Error("LanService", "局域网 HTTP API 端口绑定失败 (尝试范围 %d-%d)", basePort, basePort+19)
 }
 
 func (s *LanService) downloadFile(fileURL, targetPath string, isDirMod bool) error {
